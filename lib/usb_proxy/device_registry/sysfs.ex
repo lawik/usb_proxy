@@ -6,8 +6,6 @@ defmodule UsbProxy.DeviceRegistry.Sysfs do
 
   @behaviour UsbProxy.DeviceRegistry.Hardware
 
-  require Logger
-
   @sysfs "/sys/bus/usb/devices"
   @usbip "/usr/sbin/usbip"
 
