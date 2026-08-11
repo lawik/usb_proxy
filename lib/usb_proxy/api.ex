@@ -22,7 +22,9 @@ defmodule UsbProxy.Api do
       `usbip attach`; changes on replug, always re-resolve it here
       first), `present`/`bound`/`attached` booleans, and `kind`. A
       device is free to attach over USB/IP when present=true,
-      bound=true, attached=false.
+      bound=true, attached=false. `power_cyclable` tells you whether a
+      :vbus recovery can truly power-cycle it (false = it sits behind an
+      externally powered hub and can only be re-enumerated).
       """)
     end
 

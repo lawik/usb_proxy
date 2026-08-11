@@ -19,6 +19,19 @@ defmodule UsbProxy.DeviceRegistry do
   disabled (`power/control` = `on`). Serial-console carve-outs arrive in
   Phase 6.
 
+  Hubs are transparent: devices behind (nested) hubs are enumerated,
+  named, and bound like any other, and a hub disconnect just looks like
+  all its children vanishing (they re-match on return). What topology
+  DOES change is recovery semantics: only devices on a hub whose VBUS
+  can really be switched (`:power_cyclable_hubs`, default the Pi's
+  built-in `"1-1"`) can be power-cycled remotely. Devices behind an
+  externally powered hub without per-port switching only ever get a
+  logical re-enumeration. Each record carries `hub` and
+  `power_cyclable?` so agents and the recovery service can tell the
+  difference. Known gap: a serial-less device that moves along with its
+  hub to a different upstream port is treated as new (its identity is
+  port-based).
+
   This module is the data layer behind the Ash `Device` resource
   (Phase 5) — keep the query interface clean.
   """
@@ -174,6 +187,8 @@ defmodule UsbProxy.DeviceRegistry do
           product: seen.product,
           manufacturer: seen.manufacturer,
           busid: seen.busid,
+          hub: parent_busid(seen.busid),
+          power_cyclable?: power_cyclable?(seen.busid),
           kind: :usbip,
           present?: true,
           bound?: false,
@@ -192,8 +207,11 @@ defmodule UsbProxy.DeviceRegistry do
       :new
   end
 
-  defp find_by_serial(known, %{serial: serial}) when is_binary(serial) do
-    case Enum.find(known, &(&1.serial == serial)) do
+  # vid:pid is part of the identity: serials are only unique per model
+  # (every CP2102 ships as "0001"). Cross-mode continuity (which changes
+  # vid:pid AND often serial) is port re-match's job, not this one's.
+  defp find_by_serial(known, %{serial: serial} = seen) when is_binary(serial) do
+    case Enum.find(known, &(&1.serial == serial and &1.vid == seen.vid and &1.pid == seen.pid)) do
       nil -> nil
       match -> {:serial, match.name}
     end
@@ -235,10 +253,30 @@ defmodule UsbProxy.DeviceRegistry do
           product: seen.product,
           manufacturer: seen.manufacturer,
           busid: seen.busid,
+          hub: parent_busid(seen.busid),
+          power_cyclable?: power_cyclable?(seen.busid),
           present?: true,
           removed_at: nil
       }
     end)
+  end
+
+  # "1-1.3.2.3" hangs off hub "1-1.3.2"; "1-1.4" off the built-in "1-1".
+  defp parent_busid(busid) do
+    case busid |> String.split(".") |> Enum.drop(-1) do
+      [] -> "root"
+      parts -> Enum.join(parts, ".")
+    end
+  end
+
+  # Whether a :vbus recovery can truly cut this device's power: only on
+  # hubs with verified working VBUS switching. All-or-nothing per hub.
+  defp power_cyclable?(busid) do
+    hubs =
+      Application.get_env(:usb_proxy, __MODULE__, [])
+      |> Keyword.get(:power_cyclable_hubs, ["1-1"])
+
+    parent_busid(busid) in hubs
   end
 
   ## Binding

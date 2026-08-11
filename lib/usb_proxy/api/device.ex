@@ -83,6 +83,23 @@ defmodule UsbProxy.Api.Device do
       """)
     end
 
+    attribute :hub, :string do
+      public?(true)
+      description("Bus id of the hub this device hangs off (topology info).")
+    end
+
+    attribute :power_cyclable, :boolean do
+      public?(true)
+
+      description("""
+      Whether a :vbus recovery action can truly cut this device's power.
+      true: on a hub with working VBUS switching (all ports cycle
+      together). false: behind an externally powered hub — recovery can
+      only re-enumerate it, not power-cycle it; a hard-wedged device
+      there needs a human.
+      """)
+    end
+
     attribute :present, :boolean do
       public?(true)
       description("Whether the device is currently enumerated on the USB bus.")
@@ -125,6 +142,8 @@ defmodule UsbProxy.Api.Device do
           product: d.product,
           manufacturer: d.manufacturer,
           busid: d.busid,
+          hub: d.hub,
+          power_cyclable: d.power_cyclable?,
           present: d.present?,
           bound: d.bound?,
           attached: d.attached?,

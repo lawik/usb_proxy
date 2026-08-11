@@ -40,6 +40,11 @@ config :usb_proxy, UsbProxyWeb.Endpoint,
   http: [ip: {0, 0, 0, 0}, port: 4000],
   server: true
 
+# Hubs whose VBUS switching genuinely cuts power (verified with
+# uhubctl + a bus-powered device). Devices elsewhere are reported
+# power_cyclable: false and can only be logically re-enumerated.
+config :usb_proxy, UsbProxy.DeviceRegistry, power_cyclable_hubs: ["1-1"]
+
 # Persistent, size-capped, append-only event log on the data partition.
 # Survives reboots and power cuts; records operationally significant
 # events (boots, binds, attaches, flash operations, recovery actions).
