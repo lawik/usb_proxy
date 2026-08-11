@@ -66,10 +66,7 @@ defmodule UsbProxy.MixProject do
       # usbip userspace tools, dfu-util, uhubctl, usbutils, eudev.
       # Prebuilt artifact comes from the fork's GitHub releases.
       {:nerves_system_rpi4,
-       github: "lawik/nerves_system_rpi4",
-       branch: "usbip",
-       runtime: false,
-       targets: :rpi4}
+       github: "lawik/nerves_system_rpi4", branch: "usbip", runtime: false, targets: :rpi4}
     ]
   end
 

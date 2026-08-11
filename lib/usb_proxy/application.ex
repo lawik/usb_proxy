@@ -55,8 +55,12 @@ defmodule UsbProxy.Application do
     defp target_children() do
       [
         # Joins/rejoins the tailnet; state on the data partition.
-        UsbProxy.Tailscale
-        # Phase 4: UsbProxy.DeviceRegistry (usbip bind reconciliation)
+        UsbProxy.Tailscale,
+        # Serves bound devices to USB/IP clients on 3240.
+        {UsbProxy.DaemonKeeper, id: :usbipd, command: "/usr/sbin/usbipd", args: []},
+        # Enumerates, names, and binds USB devices; reconciles on
+        # boot, hotplug, and a periodic timer.
+        UsbProxy.DeviceRegistry
         # Phase 6: UsbProxy.SerialConsoles
       ]
     end
