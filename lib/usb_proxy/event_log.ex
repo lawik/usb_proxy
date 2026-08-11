@@ -29,12 +29,14 @@ defmodule UsbProxy.EventLog do
   end
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @impl true
-  def init(_opts) do
-    config = Application.fetch_env!(:usb_proxy, __MODULE__)
+  def init(opts) do
+    # Options override app config so tests can run isolated instances.
+    config = Application.get_env(:usb_proxy, __MODULE__, []) |> Keyword.merge(opts)
     path = Keyword.fetch!(config, :path)
     max_bytes = Keyword.get(config, :max_bytes, 1_000_000)
 

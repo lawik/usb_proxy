@@ -12,6 +12,7 @@ defmodule UsbProxy.MixProject do
       app: @app,
       version: @version,
       elixir: "~> 1.19",
+      elixirc_paths: elixirc_paths(Mix.env()),
       archives: [nerves_bootstrap: "~> 1.15"],
       listeners: listeners(Mix.target(), Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -86,4 +87,7 @@ defmodule UsbProxy.MixProject do
   end
 
   defp listeners(_, _), do: []
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 end

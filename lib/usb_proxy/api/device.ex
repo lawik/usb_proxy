@@ -68,7 +68,11 @@ defmodule UsbProxy.Api.Device do
             {:ok, %{name: device.name, kind: device.kind, exposure: device.exposure}}
 
           {:error, :not_found} ->
-            {:error, "no device named #{input.arguments.name}"}
+            {:error,
+             Ash.Error.Action.InvalidArgument.exception(
+               field: :name,
+               message: "no device named #{input.arguments.name}"
+             )}
         end
       end)
     end
@@ -90,7 +94,18 @@ defmodule UsbProxy.Api.Device do
       argument(:mode, :string, allow_nil?: false)
 
       run(fn input, _context ->
-        UsbProxy.ModeSwitch.request(input.arguments.name, input.arguments.mode)
+        case UsbProxy.ModeSwitch.request(input.arguments.name, input.arguments.mode) do
+          {:ok, result} ->
+            {:ok, result}
+
+          # A plain-string error would be masked as "unexpected error";
+          # the explain-what-to-try-instead messages must reach agents.
+          {:error, message} when is_binary(message) ->
+            {:error, Ash.Error.Action.InvalidArgument.exception(field: :mode, message: message)}
+
+          {:error, other} ->
+            {:error, other}
+        end
       end)
     end
   end

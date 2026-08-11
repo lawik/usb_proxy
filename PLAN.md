@@ -195,6 +195,20 @@ The recovery ladder: VBUS cycle → usbproxy reboot → (human) wall power.
 
 ---
 
+## Future design notes (not scheduled)
+
+- **Per-VM device gating (claims/leases).** Today any `tag:agent` node
+  may operate on any device; exclusivity is only mechanical (usbip
+  single-attach, single console client, one flash job per device).
+  When gating becomes necessary: add a claim/lease action on `Device`
+  (TTL-based, bound to requester identity — source tailnet IP, mappable
+  to a node via `tailscale whois`), and flip to a default-unbound
+  model: devices are only usbip-bound while claimed, so raw
+  `usbip attach` on 3240 is enforced by bind state rather than trust.
+  Consoles check the connecting peer against the claim; flash and
+  recovery actions check the claimant. Everything already flows through
+  Ash actions, so this slots in without restructuring.
+
 ## Standing rules for the implementing agent
 
 - Every agent-facing operation is an Ash action, exposed via both AshJsonApi and ash_ai MCP tools. No service reaches around Ash; no interface-specific behavior.

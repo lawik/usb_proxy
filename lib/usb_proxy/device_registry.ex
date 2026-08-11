@@ -39,13 +39,11 @@ defmodule UsbProxy.DeviceRegistry do
   use GenServer
   require Logger
 
-  @sysfs "/sys/bus/usb/devices"
-  @usbip "/usr/sbin/usbip"
   @debounce_ms 750
   @periodic_ms 30_000
   # A vanished device re-appearing on the same port within this window
   # with a different vid:pid is the same hardware in a new mode.
-  @rematch_window_ms 15_000
+  @default_rematch_window_ms 15_000
 
   ## Query API (backs the Ash Device resource — keep it clean)
 
@@ -82,8 +80,12 @@ defmodule UsbProxy.DeviceRegistry do
 
   @impl true
   def init(_opts) do
-    # Any USB uevent just hurries up the next reconcile.
-    NervesUEvent.subscribe([])
+    # Any USB uevent just hurries up the next reconcile. (Off in tests —
+    # no uevent source on the host.)
+    unless config(:subscribe_uevents?) == false do
+      NervesUEvent.subscribe([])
+    end
+
     {:ok, %{devices: %{}, timer: nil}, {:continue, :reconcile}}
   end
 
@@ -137,13 +139,23 @@ defmodule UsbProxy.DeviceRegistry do
   ## Reconciliation
 
   defp reconcile(state) do
-    scanned = scan_sysfs()
+    scanned = hardware().scan()
 
-    devices =
+    # The matched set prevents two scan entries from claiming the same
+    # record in one pass — identical adapters share vid+pid AND serial
+    # (paired CP2102s all say "0001"), so first-match alone would let
+    # the second one hijack the first's record instead of becoming its
+    # own device.
+    {devices, _matched} =
       state.devices
       |> mark_removed(scanned)
-      |> then(&Enum.reduce(scanned, &1, fn seen, acc -> upsert(acc, seen) end))
-      |> Map.new(fn {name, device} -> {name, ensure_bound(device)} end)
+      |> then(fn devices ->
+        Enum.reduce(scanned, {devices, MapSet.new()}, fn seen, {acc, matched} ->
+          upsert(acc, seen, matched)
+        end)
+      end)
+
+    devices = Map.new(devices, fn {name, device} -> {name, ensure_bound(device)} end)
 
     Phoenix.PubSub.broadcast(UsbProxy.PubSub, "device_registry", :devices_changed)
 
@@ -179,13 +191,13 @@ defmodule UsbProxy.DeviceRegistry do
   defp same_hardware?(device, seen),
     do: seen.serial == nil and device.vid == seen.vid and device.pid == seen.pid
 
-  defp upsert(devices, seen) do
-    case match_known(devices, seen) do
+  defp upsert(devices, seen, matched) do
+    case match_known(devices, seen, matched) do
       {:serial, name} ->
-        update_matched(devices, name, seen)
+        {update_matched(devices, name, seen), MapSet.put(matched, name)}
 
       {:port_identity, name} ->
-        update_matched(devices, name, seen)
+        {update_matched(devices, name, seen), MapSet.put(matched, name)}
 
       {:mode_change, name} ->
         old = devices[name]
@@ -201,7 +213,7 @@ defmodule UsbProxy.DeviceRegistry do
           to: "#{seen.vid}:#{seen.pid}"
         })
 
-        update_matched(devices, name, seen)
+        {update_matched(devices, name, seen), MapSet.put(matched, name)}
 
       :new ->
         name = unique_name(devices, seen)
@@ -214,23 +226,26 @@ defmodule UsbProxy.DeviceRegistry do
           serial: seen.serial
         })
 
-        Map.put(devices, name, %{
-          name: name,
-          vid: seen.vid,
-          pid: seen.pid,
-          serial: seen.serial,
-          product: seen.product,
-          manufacturer: seen.manufacturer,
-          busid: seen.busid,
-          hub: parent_busid(seen.busid),
-          power_cyclable?: power_cyclable?(seen.busid),
-          kind: classify(seen),
-          exposure_override: nil,
-          present?: true,
-          bound?: false,
-          removed_at: nil,
-          inserted_at: DateTime.utc_now()
-        })
+        devices =
+          Map.put(devices, name, %{
+            name: name,
+            vid: seen.vid,
+            pid: seen.pid,
+            serial: seen.serial,
+            product: seen.product,
+            manufacturer: seen.manufacturer,
+            busid: seen.busid,
+            hub: parent_busid(seen.busid),
+            power_cyclable?: power_cyclable?(seen.busid),
+            kind: classify(seen),
+            exposure_override: nil,
+            present?: true,
+            bound?: false,
+            removed_at: nil,
+            inserted_at: DateTime.utc_now()
+          })
+
+        {devices, MapSet.put(matched, name)}
     end
   end
 
@@ -267,8 +282,11 @@ defmodule UsbProxy.DeviceRegistry do
   defp exposure(%{kind: :serial}), do: :serial
   defp exposure(_device), do: :usbip
 
-  defp match_known(devices, seen) do
-    known = Map.values(devices)
+  defp match_known(devices, seen, matched) do
+    known =
+      devices
+      |> Map.values()
+      |> Enum.reject(&MapSet.member?(matched, &1.name))
 
     find_by_serial(known, seen) ||
       find_by_port_identity(known, seen) ||
@@ -303,9 +321,11 @@ defmodule UsbProxy.DeviceRegistry do
   # Same port, different identity, vanished moments ago: the same
   # hardware re-enumerated in a new mode (DFU/BOOTSEL/etc).
   defp find_mode_change(known, seen) do
+    window = config(:rematch_window_ms) || @default_rematch_window_ms
+
     case Enum.find(known, fn d ->
            not d.present? and d.busid == seen.busid and d.removed_at != nil and
-             now_ms() - d.removed_at <= @rematch_window_ms
+             now_ms() - d.removed_at <= window
          end) do
       nil -> nil
       match -> {:mode_change, match.name}
@@ -355,9 +375,16 @@ defmodule UsbProxy.DeviceRegistry do
         kv |> String.split(",") |> Enum.map(&String.trim/1)
 
       _ ->
-        Application.get_env(:usb_proxy, __MODULE__, [])
-        |> Keyword.get(:power_cyclable_hubs, ["1-1"])
+        config(:power_cyclable_hubs) || ["1-1"]
     end
+  end
+
+  defp hardware() do
+    config(:hardware) || UsbProxy.DeviceRegistry.Sysfs
+  end
+
+  defp config(key) do
+    Application.get_env(:usb_proxy, __MODULE__, []) |> Keyword.get(key)
   end
 
   ## Binding
@@ -365,11 +392,11 @@ defmodule UsbProxy.DeviceRegistry do
   defp ensure_bound(%{present?: false} = device), do: device
 
   defp ensure_bound(device) do
-    case {exposure(device), current_driver(device.busid) == "usbip-host"} do
+    case {exposure(device), hardware().current_driver(device.busid) == "usbip-host"} do
       # Serial-exposed devices keep their local kernel driver so the
       # console service can own the tty; release if wrongly bound.
       {:serial, true} ->
-        case System.cmd(@usbip, ["unbind", "-b", device.busid], stderr_to_stdout: true) do
+        case hardware().usbip(:unbind, device.busid) do
           {_out, 0} ->
             Logger.info("released #{device.name} (#{device.busid}) for serial console use")
             UsbProxy.EventLog.append(:device_unbound, %{name: device.name, busid: device.busid})
@@ -392,7 +419,7 @@ defmodule UsbProxy.DeviceRegistry do
   end
 
   defp bind(device) do
-    case System.cmd(@usbip, ["bind", "-b", device.busid], stderr_to_stdout: true) do
+    case hardware().usbip(:bind, device.busid) do
       {_out, 0} ->
         disable_autosuspend(device.busid)
         Logger.info("bound #{device.name} (#{device.busid})")
@@ -417,9 +444,8 @@ defmodule UsbProxy.DeviceRegistry do
     end
   end
 
-  # Exported devices must not autosuspend under an idle client.
   defp disable_autosuspend(busid) do
-    case File.write(Path.join([@sysfs, busid, "power/control"]), "on") do
+    case hardware().disable_autosuspend(busid) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("power/control write failed for #{busid}: #{reason}")
     end
@@ -431,108 +457,13 @@ defmodule UsbProxy.DeviceRegistry do
     do: Map.merge(device, %{bound?: false, attached?: false, exposure: exposure(device)})
 
   defp with_live_status(device) do
-    bound? = current_driver(device.busid) == "usbip-host"
+    bound? = hardware().current_driver(device.busid) == "usbip-host"
 
     Map.merge(device, %{
       bound?: bound?,
-      attached?: bound? and usbip_status(device.busid) == 2,
+      attached?: bound? and hardware().usbip_status(device.busid) == 2,
       exposure: exposure(device)
     })
-  end
-
-  defp current_driver(busid) do
-    case File.read_link(Path.join([@sysfs, busid, "driver"])) do
-      {:ok, path} -> Path.basename(path)
-      _ -> nil
-    end
-  end
-
-  # usbip-host exposes usbip_status: 1 available, 2 attached by a client,
-  # 3 error.
-  defp usbip_status(busid) do
-    case File.read(Path.join([@sysfs, busid, "usbip_status"])) do
-      {:ok, contents} -> contents |> String.trim() |> String.to_integer()
-      _ -> nil
-    end
-  end
-
-  ## Sysfs scanning
-
-  defp scan_sysfs() do
-    case File.ls(@sysfs) do
-      {:ok, entries} ->
-        entries
-        |> Enum.filter(&Regex.match?(~r/^\d+-[\d.]+$/, &1))
-        |> Enum.map(&read_device/1)
-        |> Enum.reject(&(&1 == nil or hub?(&1)))
-
-      {:error, _} ->
-        []
-    end
-  end
-
-  defp read_device(busid) do
-    case sysfs_attr(busid, "idVendor") do
-      nil ->
-        nil
-
-      vid ->
-        %{
-          busid: busid,
-          vid: vid,
-          pid: sysfs_attr(busid, "idProduct"),
-          serial: sysfs_attr(busid, "serial"),
-          product: sysfs_attr(busid, "product"),
-          manufacturer: sysfs_attr(busid, "manufacturer"),
-          class: sysfs_attr(busid, "bDeviceClass"),
-          interface_classes: interface_classes(busid)
-        }
-    end
-  end
-
-  # Interface classes parsed from the raw descriptors file — the sysfs
-  # interface subdirectories vanish once usbip-host owns the device, so
-  # this is the only driver-independent source.
-  defp interface_classes(busid) do
-    case File.read(Path.join([@sysfs, busid, "descriptors"])) do
-      {:ok, binary} -> parse_interface_classes(binary, [])
-      _ -> []
-    end
-  end
-
-  defp parse_interface_classes(<<len, _type, _::binary>> = binary, acc)
-       when len > 0 and byte_size(binary) >= len do
-    <<descriptor::binary-size(^len), rest::binary>> = binary
-
-    acc =
-      case descriptor do
-        # bDescriptorType 4 = interface; class at offset 5, subclass at 6
-        <<_len, 4, _num, _alt, _num_endpoints, class, subclass, _::binary>> ->
-          [{class, subclass} | acc]
-
-        _ ->
-          acc
-      end
-
-    parse_interface_classes(rest, acc)
-  end
-
-  defp parse_interface_classes(_rest, acc), do: acc |> Enum.reverse() |> Enum.uniq()
-
-  defp hub?(%{class: "09"}), do: true
-  defp hub?(_), do: false
-
-  defp sysfs_attr(busid, attr) do
-    case File.read(Path.join([@sysfs, busid, attr])) do
-      {:ok, contents} ->
-        case String.trim(contents) do
-          "" -> nil
-          value -> value
-        end
-
-      _ ->
-        nil
-    end
   end
 
   ## Naming
