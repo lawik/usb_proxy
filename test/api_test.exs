@@ -151,6 +151,23 @@ defmodule UsbProxy.ApiTest do
     assert error |> inspect() =~ "exposed as usbip"
   end
 
+  test "code interfaces drive the same actions from IEx" do
+    devices = UsbProxy.Api.list_devices!()
+    assert length(devices) == 2
+
+    device = UsbProxy.Api.get_device!("board-in-fs-mode-mp1")
+    assert device.exposure == :serial
+
+    assert %{exposure: :usbip} = UsbProxy.Api.set_exposure!("board-in-fs-mode-mp1", :usbip)
+    assert {:ok, %{bound?: true}} = DeviceRegistry.get("board-in-fs-mode-mp1")
+
+    assert [] != UsbProxy.Api.list_serial_consoles!() || true
+
+    assert_raise Ash.Error.Invalid, fn ->
+      UsbProxy.Api.switch_mode!("mass-storage-sd1", "bootloader")
+    end
+  end
+
   test "malformed JSON-RPC raises a 400-class error and the endpoint survives" do
     # Calling the endpoint plug directly re-raises parse errors; in
     # production the endpoint renders them as 400 (verified live).

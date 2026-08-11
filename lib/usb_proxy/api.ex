@@ -67,10 +67,27 @@ defmodule UsbProxy.Api do
     end
   end
 
+  # Code interfaces: the same actions, callable from IEx on the box —
+  # e.g. UsbProxy.Api.list_devices!() or UsbProxy.Api.recover!(:vbus).
   resources do
-    resource(UsbProxy.Api.Device)
-    resource(UsbProxy.Api.SerialConsole)
-    resource(UsbProxy.Api.FlashJob)
-    resource(UsbProxy.Api.RecoveryAction)
+    resource UsbProxy.Api.Device do
+      define(:list_devices, action: :read)
+      define(:get_device, action: :get, args: [:name])
+      define(:set_exposure, action: :set_exposure, args: [:name, :exposure])
+      define(:switch_mode, action: :switch_mode, args: [:name, :mode])
+    end
+
+    resource UsbProxy.Api.SerialConsole do
+      define(:list_serial_consoles, action: :read)
+    end
+
+    resource UsbProxy.Api.RecoveryAction do
+      define(:recover, action: :create, args: [:level])
+      define(:list_recovery_actions, action: :read)
+    end
+
+    resource UsbProxy.Api.FlashJob do
+      define(:list_flash_jobs, action: :read)
+    end
   end
 end
