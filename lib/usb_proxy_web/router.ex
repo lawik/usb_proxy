@@ -6,7 +6,7 @@ defmodule UsbProxyWeb.Router do
   end
 
   # NOTE: no auth pipelines anywhere. Reachability over the tailnet IS
-  # the auth: the ACL only lets tag:agent reach this port. Do not add
+  # the auth: the ACL only lets tag:project-vm reach this port. Do not add
   # auth plugs; do not weaken the ACL. (PLAN.md standing rules)
 
   scope "/", UsbProxyWeb do
@@ -30,7 +30,8 @@ defmodule UsbProxyWeb.Router do
       :get_device,
       :set_device_exposure,
       :switch_device_mode,
-      :list_serial_consoles
+      :list_serial_consoles,
+      :recover
     ],
     protocol_version_statement: "2024-11-05",
     otp_app: :usb_proxy

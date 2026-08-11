@@ -11,7 +11,7 @@ checklists.
 
 ## Architecture notes
 
-- **Auth is the tailnet ACL** (`tailnet/policy.hujson`): `tag:agent`
+- **Auth is the tailnet ACL** (`tailnet/policy.hujson`): `tag:project-vm`
   nodes reach `tag:usbproxy` on ports 3240 (usbip), 4000 (API/MCP/health)
   and 7000–7099 (serial consoles) — nothing else, in either direction.
   The HTTP endpoint deliberately has no auth plug.
@@ -66,7 +66,7 @@ the key to `/data/tailscale/authkey`.
 ## Tailnet operations
 
 - `scripts/tailnet-apply-acl.sh` — validate + apply `tailnet/policy.hujson`
-- `scripts/mint-agent-key.sh` — single-use ephemeral `tag:agent` key
+- `scripts/mint-agent-key.sh` — single-use ephemeral `tag:project-vm` key
 - `scripts/mint-usbproxy-key.sh` — reusable `tag:usbproxy` key
 - `scripts/verify-phase1.sh` — run from a scratch agent VM to verify the ACL
 

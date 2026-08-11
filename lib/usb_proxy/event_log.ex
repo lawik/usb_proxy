@@ -22,6 +22,15 @@ defmodule UsbProxy.EventLog do
     GenServer.cast(__MODULE__, {:append, to_string(kind), fields})
   end
 
+  @doc """
+  Append and only return once the entry is written and datasync'd —
+  for events that must survive what happens next (e.g. a reboot).
+  """
+  @spec append_sync(String.t() | atom(), map()) :: :ok
+  def append_sync(kind, fields \\ %{}) do
+    GenServer.call(__MODULE__, {:append, to_string(kind), fields})
+  end
+
   @doc "Read the most recent `n` events, newest last. For debugging/API."
   @spec tail(pos_integer()) :: [map()]
   def tail(n \\ 50) do
@@ -60,6 +69,10 @@ defmodule UsbProxy.EventLog do
   end
 
   @impl true
+  def handle_call({:append, kind, fields}, _from, state) do
+    {:reply, :ok, write(state, kind, fields)}
+  end
+
   def handle_call({:tail, n}, _from, state) do
     events =
       [state.path <> ".1", state.path]

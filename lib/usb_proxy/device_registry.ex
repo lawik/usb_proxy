@@ -369,7 +369,9 @@ defmodule UsbProxy.DeviceRegistry do
     parent_busid(busid) in power_cyclable_hubs()
   end
 
-  defp power_cyclable_hubs() do
+  @doc false
+  # Public: the recovery service cycles the same hubs.
+  def power_cyclable_hubs() do
     case Nerves.Runtime.KV.get("power_cyclable_hubs") do
       kv when is_binary(kv) and kv != "" ->
         kv |> String.split(",") |> Enum.map(&String.trim/1)

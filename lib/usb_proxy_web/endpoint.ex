@@ -5,6 +5,9 @@ defmodule UsbProxyWeb.Endpoint do
 
   plug(Plug.RequestId)
 
+  # Requester source address for audit logging (recovery actions etc).
+  plug(UsbProxy.RequesterIP)
+
   plug(Plug.Parsers,
     parsers: [:json],
     pass: ["*/*"],

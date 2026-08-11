@@ -12,11 +12,11 @@ Work the phases in order. Do not start a phase until the previous phase's verifi
 
 Do this first so that everything built afterward is tested under the real security policy, not an allow-all network.
 
-1. Create tags: `tag:agent`, `tag:usbproxy`.
+1. Create tags: `tag:project-vm`, `tag:usbproxy`.
 2. Replace the default allow-all ACL:
    - Admin devices → everything.
-   - `tag:agent` → `tag:usbproxy` on: 3240 (usbip), the serial port range (pick one now, e.g. 7000–7099), and the API port (e.g. 4000 — serves JSON API, MCP, and health from one Phoenix endpoint).
-   - No other rules involving `tag:agent`. No SSH grants to or from `tag:agent`.
+   - `tag:project-vm` → `tag:usbproxy` on: 3240 (usbip), the serial port range (pick one now, e.g. 7000–7099), and the API port (e.g. 4000 — serves JSON API, MCP, and health from one Phoenix endpoint).
+   - No other rules involving `tag:project-vm`. No SSH grants to or from `tag:project-vm`.
 3. Create an API-minted, single-use, pre-authorized, tagged ephemeral key flow for agents (script or note the exact API call). Create a normal (non-ephemeral) reusable approach for the usbproxy.
 
 **Confirm:**
@@ -197,7 +197,7 @@ The recovery ladder: VBUS cycle → usbproxy reboot → (human) wall power.
 
 ## Future design notes (not scheduled)
 
-- **Per-VM device gating (claims/leases).** Today any `tag:agent` node
+- **Per-VM device gating (claims/leases).** Today any `tag:project-vm` node
   may operate on any device; exclusivity is only mechanical (usbip
   single-attach, single console client, one flash job per device).
   When gating becomes necessary: add a claim/lease action on `Device`

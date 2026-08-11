@@ -41,6 +41,21 @@ defmodule UsbProxy.Api do
 
     tool(:switch_device_mode, UsbProxy.Api.Device, :switch_mode)
 
+    tool :recover, UsbProxy.Api.RecoveryAction, :create do
+      description("""
+      Recovery ladder when hardware misbehaves, least to most disruptive.
+      level=vbus: power-cycle the usbproxy's switchable USB hubs — ALL
+      devices on them drop and return within ~10 seconds, re-bound
+      automatically, consoles resume; devices behind non-switchable hubs
+      only re-enumerate (see each device's power_cyclable). level=reboot:
+      reboot the whole usbproxy — expect ~half a minute of downtime,
+      poll /up until it answers, then re-resolve busids before
+      re-attaching. Both levels are rate-limited: a rejected call errors
+      with a retry time — wait, don't loop. If neither level helps, a
+      human has to touch the hardware.
+      """)
+    end
+
     tool :list_serial_consoles, UsbProxy.Api.SerialConsole, :read do
       description("""
       List serial consoles this usbproxy exports. Each console maps a

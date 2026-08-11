@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mint a single-use, pre-authorized, EPHEMERAL auth key tagged tag:agent.
+# Mint a single-use, pre-authorized, EPHEMERAL auth key tagged tag:project-vm.
 # The node it creates disappears from the tailnet shortly after going offline.
 # Prints the key (tskey-auth-...) on stdout; everything else goes to stderr.
 #
@@ -24,7 +24,7 @@ resp="$(curl -sf "$TS_API_BASE/tailnet/$TS_TAILNET/keys" \
         "reusable": false,
         "ephemeral": true,
         "preauthorized": true,
-        "tags": ["tag:agent"]
+        "tags": ["tag:project-vm"]
       }
     }
   }
@@ -33,5 +33,5 @@ EOF
 )"
 key="$(printf '%s' "$resp" | sed -n 's/.*"key" *: *"\(tskey-[^"]*\)".*/\1/p')"
 [[ -n "$key" ]] || { echo "error: no key in response: $resp" >&2; exit 1; }
-echo "Join with: tailscale up --auth-key=<key> (device auto-tags tag:agent)" >&2
+echo "Join with: tailscale up --auth-key=<key> (device auto-tags tag:project-vm)" >&2
 echo "$key"

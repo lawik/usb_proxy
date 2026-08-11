@@ -20,6 +20,8 @@ defmodule UsbProxy.Application do
         # First, so every later child can log operational events.
         UsbProxy.EventLog,
         {Phoenix.PubSub, name: UsbProxy.PubSub},
+        # Rate-limited recovery ladder (vbus cycle / reboot).
+        UsbProxy.Recovery,
         UsbProxyWeb.Endpoint
       ] ++ target_children()
 
