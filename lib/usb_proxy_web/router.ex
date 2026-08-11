@@ -2,7 +2,7 @@ defmodule UsbProxyWeb.Router do
   use Phoenix.Router
 
   pipeline :api do
-    plug(:accepts, ["json"])
+    plug(:accepts, ["json", "json_api"])
   end
 
   # NOTE: no auth pipelines anywhere. Reachability over the tailnet IS
@@ -15,7 +15,18 @@ defmodule UsbProxyWeb.Router do
     get("/up", HealthController, :up)
   end
 
-  # Phase 5 adds:
-  #   /api — AshJsonApi routes
-  #   /mcp — AshAi.Mcp.Router (no auth plug in the :mcp pipeline)
+  # JSON:API — same Ash actions as the MCP tools below.
+  scope "/api" do
+    pipe_through(:api)
+
+    forward("/", UsbProxyWeb.AshJsonApiRouter)
+  end
+
+  # MCP — no auth plug in this pipeline, per the standing rule above.
+  # protocol_version_statement pinned for stateless-HTTP client compat.
+  forward("/mcp", AshAi.Mcp.Router,
+    tools: [:list_devices, :get_device, :list_serial_consoles],
+    protocol_version_statement: "2024-11-05",
+    otp_app: :usb_proxy
+  )
 end

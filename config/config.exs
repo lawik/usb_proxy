@@ -24,6 +24,12 @@ config :usb_proxy, UsbProxyWeb.Endpoint,
 
 config :phoenix, :json_library, Jason
 
+# JSON:API media type (AshJsonApi). Requires `mix deps.compile mime --force`
+# after changing. Registered as its own "json_api" format so plain
+# application/json stays the default for /up and /mcp.
+config :mime,
+  types: %{"application/vnd.api+json" => ["json_api"]}
+
 ################################################################
 ## Ash
 ################################################################
