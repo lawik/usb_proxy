@@ -92,22 +92,28 @@ defmodule UsbProxy.DeviceRegistry do
 
   defp reconcile(state) do
     scanned = scan_sysfs()
-    scanned_busids = MapSet.new(scanned, & &1.busid)
 
     devices =
       state.devices
-      |> mark_removed(scanned_busids)
+      |> mark_removed(scanned)
       |> then(&Enum.reduce(scanned, &1, fn seen, acc -> upsert(acc, seen) end))
       |> Map.new(fn {name, device} -> {name, ensure_bound(device)} end)
 
     %{state | devices: devices} |> schedule(@periodic_ms)
   end
 
-  # Devices whose busid is gone from sysfs are absent (or mid-mode-change;
-  # upsert may resurrect them via port re-match right after).
-  defp mark_removed(devices, scanned_busids) do
+  # A device is removed when its busid is gone from sysfs OR when the
+  # node at its busid is different hardware — a device can disconnect
+  # and something else (typically itself in a new mode, e.g. after a
+  # flash reboots it out of BOOTSEL) can re-enumerate at the same port
+  # entirely between two reconciles, so port occupancy alone proves
+  # nothing. Marked-removed devices may be resurrected right after by
+  # upsert's port re-match, keeping their stable name.
+  defp mark_removed(devices, scanned) do
+    by_busid = Map.new(scanned, &{&1.busid, &1})
+
     Map.new(devices, fn {name, device} ->
-      if device.present? and not MapSet.member?(scanned_busids, device.busid) do
+      if device.present? and not same_hardware?(device, by_busid[device.busid]) do
         Logger.info("device removed: #{name} (#{device.busid})")
         UsbProxy.EventLog.append(:device_removed, %{name: name, busid: device.busid})
         {name, %{device | present?: false, bound?: false, removed_at: now_ms()}}
@@ -116,6 +122,14 @@ defmodule UsbProxy.DeviceRegistry do
       end
     end)
   end
+
+  defp same_hardware?(_device, nil), do: false
+
+  defp same_hardware?(%{serial: serial}, seen) when is_binary(serial),
+    do: seen.serial == serial
+
+  defp same_hardware?(device, seen),
+    do: seen.serial == nil and device.vid == seen.vid and device.pid == seen.pid
 
   defp upsert(devices, seen) do
     case match_known(devices, seen) do
