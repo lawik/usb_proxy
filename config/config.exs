@@ -8,6 +8,35 @@ import Config
 # Enable the Nerves integration with Mix
 Application.start(:nerves_bootstrap)
 
+config :usb_proxy, target: Mix.target()
+
+################################################################
+## Phoenix / API
+################################################################
+
+# One endpoint serves everything agent-facing: JSON API under /api,
+# MCP under /mcp, health at /up. Port 4000 per the tailnet ACL.
+config :usb_proxy, UsbProxyWeb.Endpoint,
+  adapter: Bandit.PhoenixAdapter,
+  url: [host: "usbproxy"],
+  render_errors: [formats: [json: UsbProxyWeb.ErrorJSON], layout: false],
+  pubsub_server: UsbProxy.PubSub
+
+config :phoenix, :json_library, Jason
+
+################################################################
+## Ash
+################################################################
+
+config :usb_proxy, ash_domains: [UsbProxy.Api]
+
+# No database on this box; resources use manual/ETS-style data layers.
+config :ash, :disable_async?, true
+
+################################################################
+## Nerves
+################################################################
+
 # Customize non-Elixir parts of the firmware. See
 # https://hexdocs.pm/nerves/advanced-configuration.html for details.
 

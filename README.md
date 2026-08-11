@@ -1,33 +1,74 @@
-# UsbProxy
+# usbproxy
 
-**TODO: Add description**
+Nerves firmware for a Raspberry Pi 4 that exports lab hardware to agent
+VMs over Tailscale: USB devices via USB/IP, serial consoles via TCP, a
+local flash service, and a recovery endpoint. The agent-facing API is
+built with Ash on Phoenix and exposed twice from one endpoint — as a
+JSON API (AshJsonApi, `/api`) and as an MCP server (ash_ai, `/mcp`).
 
-## Targets
+See `PLAN.md` for the phased implementation plan and verification
+checklists.
 
-Nerves applications produce images for hardware targets based on the
-`MIX_TARGET` environment variable. If `MIX_TARGET` is unset, `mix` builds an
-image that runs on the host (e.g., your laptop). This is useful for executing
-logic tests, running utilities, and debugging. Other targets are represented by
-a short name like `rpi3` that maps to a Nerves system image for that platform.
-All of this logic is in the generated `mix.exs` and may be customized. For more
-information about targets see:
+## Architecture notes
 
-https://hexdocs.pm/nerves/supported-targets.html
+- **Auth is the tailnet ACL** (`tailnet/policy.hujson`): `tag:agent`
+  nodes reach `tag:usbproxy` on ports 3240 (usbip), 4000 (API/MCP/health)
+  and 7000–7099 (serial consoles) — nothing else, in either direction.
+  The HTTP endpoint deliberately has no auth plug.
+- **Boot reconciliation only.** The box assumes nothing about prior
+  state on startup; power cuts are routine, clean shutdown is not a
+  concept. Anything that depends on a shutdown handler is a bug.
+- **Event log**: operationally significant events (boots, binds,
+  attaches, flashes, recovery) append to a size-capped JSONL file on
+  the data partition (`/data/usb_proxy/events.log`), datasync'd per
+  entry so it survives power cuts.
+- **Custom system**: `lawik/nerves_system_rpi4`, branch `usbip` —
+  adds `CONFIG_USBIP_CORE/HOST`, usbip userspace tools, dfu-util,
+  uhubctl, usbutils, eudev (libudev for usbip; udevd never runs).
+  Tailscale is NOT in the system: static arm64 binaries are fetched
+  into `rootfs_overlay/usr/bin/` by `scripts/fetch-tailscale.sh`.
 
-## Getting Started
+## Building firmware
 
-To start your Nerves app:
-  * `export MIX_TARGET=my_target` or prefix every command with
-    `MIX_TARGET=my_target`. For example, `MIX_TARGET=rpi3`
-  * Install dependencies with `mix deps.get`
-  * Create firmware with `mix firmware`
-  * Burn to an SD card with `mix burn`
+```sh
+scripts/fetch-tailscale.sh   # once, and after version bumps
+mix deps.get
+MIX_TARGET=rpi4 mix firmware
+MIX_TARGET=rpi4 mix burn
+```
 
-## Learn more
+The custom system is built on the m1mini build machine (lima VM `dev`);
+`scripts/buildhost.sh` wraps `ssh m1mini` + `limactl shell dev`:
 
-  * Official docs: https://hexdocs.pm/nerves/getting-started.html
-  * Official website: https://nerves-project.org/
-  * Forum: https://elixirforum.com/c/nerves-forum
-  * Elixir Slack #nerves channel: https://elixir-slack.community/
-  * Elixir Discord #nerves channel: https://discord.gg/elixir
-  * Source: https://github.com/nerves-project/nerves
+```sh
+scripts/buildhost.sh --sync                 # push local system tree to the VM
+scripts/buildhost.sh 'cd nerves_system_rpi4 && mix nerves.artifact'
+scripts/buildhost.sh --get <vm-path> <local-path>
+```
+
+## Provisioning a device
+
+1. Mint a reusable `tag:usbproxy` auth key: `scripts/mint-usbproxy-key.sh`
+   (needs `TS_API_KEY`). Put it in `.envrc` as `TAILSCALE_AUTHKEY`
+   (gitignored; direnv loads it).
+2. `MIX_TARGET=rpi4 mix burn` — the custom system's fwup provisioning
+   writes `tailscale_authkey` into uboot-env at burn time from
+   `$TAILSCALE_AUTHKEY`. Plug in the Pi; it joins the tailnet as
+   `usbproxy` unattended.
+3. Node identity lives in `/data/tailscale` and survives reboots, power
+   cuts, and firmware updates — the key is only used on first boot (or
+   after reformatting the data partition).
+
+Fallbacks if the card was burned without the env var: over local ssh run
+`Nerves.Runtime.KV.put("tailscale_authkey", "tskey-auth-...")`, or write
+the key to `/data/tailscale/authkey`.
+
+## Tailnet operations
+
+- `scripts/tailnet-apply-acl.sh` — validate + apply `tailnet/policy.hujson`
+- `scripts/mint-agent-key.sh` — single-use ephemeral `tag:agent` key
+- `scripts/mint-usbproxy-key.sh` — reusable `tag:usbproxy` key
+- `scripts/verify-phase1.sh` — run from a scratch agent VM to verify the ACL
+
+All need `TS_API_KEY` (or `TS_OAUTH_CLIENT_ID`/`TS_OAUTH_CLIENT_SECRET`
+with `policy_file` + `auth_keys` scopes).

@@ -3,7 +3,9 @@ defmodule UsbProxy.MixProject do
 
   @app :usb_proxy
   @version "0.1.0"
-  @all_targets [:bbb, :grisp2, :osd32mp1, :mangopi_mq_pro, :qemu_aarch64, :rpi, :rpi0, :rpi0_2, :rpi2, :rpi3, :rpi4, :rpi5, :x86_64]
+  # Only rpi4 is supported: the firmware depends on the custom
+  # lawik/nerves_system_rpi4 "usbip" system (USB/IP host + USB tools).
+  @all_targets [:rpi4]
 
   def project do
     [
@@ -38,6 +40,20 @@ defmodule UsbProxy.MixProject do
       {:shoehorn, "~> 0.9.1"},
       {:ring_logger, "~> 0.11.0"},
       {:toolshed, "~> 0.4.0"},
+      {:jason, "~> 1.4"},
+
+      # Web/API layer: one Phoenix endpoint serves JSON API, MCP, and /up
+      {:phoenix, "~> 1.8"},
+      {:bandit, "~> 1.12"},
+
+      # Ash: every agent-facing operation is an Ash action, exposed via
+      # AshJsonApi (JSON API) and ash_ai (MCP tools)
+      {:ash, "~> 3.31"},
+      {:ash_json_api, "~> 1.7"},
+      {:ash_ai, "~> 0.8.2"},
+
+      # Supervised external daemons (tailscaled, usbipd)
+      {:muontrap, "~> 1.8"},
 
       # Allow Nerves.Runtime on host to support development, testing and CI.
       # See config/host.exs for usage.
@@ -46,24 +62,11 @@ defmodule UsbProxy.MixProject do
       # Dependencies for all targets except :host
       {:nerves_pack, "~> 0.7.1", targets: @all_targets},
 
-      # Dependencies for specific targets
-      # NOTE: It's generally low risk and recommended to follow minor version
-      # bumps to Nerves systems. Since these include Linux kernel and Erlang
-      # version updates, please review their release notes in case
-      # changes to your application are needed.
-      {:nerves_system_bbb, "~> 2.19", runtime: false, targets: :bbb},
-      {:nerves_system_grisp2, "~> 0.8", runtime: false, targets: :grisp2},
-      {:nerves_system_osd32mp1, "~> 0.15", runtime: false, targets: :osd32mp1},
-      {:nerves_system_mangopi_mq_pro, "~> 0.6", runtime: false, targets: :mangopi_mq_pro},
-      {:nerves_system_qemu_aarch64, "~> 0.1", runtime: false, targets: :qemu_aarch64},
-      {:nerves_system_rpi, "~> 2.0", runtime: false, targets: :rpi},
-      {:nerves_system_rpi0, "~> 2.0", runtime: false, targets: :rpi0},
-      {:nerves_system_rpi0_2, "~> 2.0", runtime: false, targets: :rpi0_2},
-      {:nerves_system_rpi2, "~> 2.0", runtime: false, targets: :rpi2},
-      {:nerves_system_rpi3, "~> 2.0", runtime: false, targets: :rpi3},
-      {:nerves_system_rpi4, "~> 2.0", runtime: false, targets: :rpi4},
-      {:nerves_system_rpi5, "~> 2.0", runtime: false, targets: :rpi5},
-      {:nerves_system_x86_64, "~> 1.24", runtime: false, targets: :x86_64}
+      # Custom system: nerves_system_rpi4 fork with USBIP_CORE/USBIP_HOST,
+      # usbip userspace tools, dfu-util, uhubctl, usbutils, eudev.
+      # TODO: flip to {:nerves_system_rpi4, github: "lawik/nerves_system_rpi4",
+      # branch: "usbip", ...} once the branch is pushed.
+      {:nerves_system_rpi4, path: "../nerves_system_rpi4", runtime: false, targets: :rpi4}
     ]
   end
 
@@ -79,7 +82,5 @@ defmodule UsbProxy.MixProject do
     ]
   end
 
-  # Uncomment the following line if using Phoenix > 1.8.
-  # defp listeners(:host, :dev), do: [Phoenix.CodeReloader]
   defp listeners(_, _), do: []
 end

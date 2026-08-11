@@ -1,23 +1,46 @@
 defmodule UsbProxy.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  usbproxy supervision tree.
+
+  Boot-reconciliation rule: startup code assumes nothing about prior
+  state. The box can lose power at any moment; there is no shutdown
+  handler that matters. Every service must reconcile reality (what
+  hardware is present, what is exported, what tailscaled remembers)
+  from scratch on start.
+  """
 
   use Application
 
   @impl true
   def start(_type, _args) do
+    ensure_endpoint_secret()
+
     children =
       [
-        # Children for all targets
-        # Starts a worker by calling: UsbProxy.Worker.start_link(arg)
-        # {UsbProxy.Worker, arg},
+        # First, so every later child can log operational events.
+        UsbProxy.EventLog,
+        {Phoenix.PubSub, name: UsbProxy.PubSub},
+        UsbProxyWeb.Endpoint
       ] ++ target_children()
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: UsbProxy.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # The API serves no sessions or cookies, so a per-boot random secret
+  # is fine on the device. Host config sets a static one.
+  defp ensure_endpoint_secret() do
+    config = Application.get_env(:usb_proxy, UsbProxyWeb.Endpoint, [])
+
+    unless config[:secret_key_base] do
+      secret = Base.encode64(:crypto.strong_rand_bytes(48))
+
+      Application.put_env(
+        :usb_proxy,
+        UsbProxyWeb.Endpoint,
+        Keyword.put(config, :secret_key_base, secret)
+      )
+    end
   end
 
   # List all child processes to be supervised
@@ -26,17 +49,15 @@ defmodule UsbProxy.Application do
       [
         # Children that only run on the host during development or test.
         # In general, prefer using `config/host.exs` for differences.
-        #
-        # Starts a worker by calling: Host.Worker.start_link(arg)
-        # {Host.Worker, arg},
       ]
     end
   else
     defp target_children() do
       [
-        # Children for all targets except host
-        # Starts a worker by calling: Target.Worker.start_link(arg)
-        # {Target.Worker, arg},
+        # Joins/rejoins the tailnet; state on the data partition.
+        UsbProxy.Tailscale
+        # Phase 4: UsbProxy.DeviceRegistry (usbip bind reconciliation)
+        # Phase 6: UsbProxy.SerialConsoles
       ]
     end
   end

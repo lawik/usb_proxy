@@ -2,6 +2,16 @@ import Config
 
 # Add configuration that is only needed when running on the host here.
 
+# Dev/test endpoint on localhost only.
+config :usb_proxy, UsbProxyWeb.Endpoint,
+  http: [ip: {127, 0, 0, 1}, port: 4000],
+  server: true,
+  # Host-only secret; the device generates its own at runtime.
+  secret_key_base: String.duplicate("host-dev-secret", 5)
+
+# Event log goes to a temp dir on the host.
+config :usb_proxy, UsbProxy.EventLog, path: "/tmp/usb_proxy_dev/events.log"
+
 config :nerves_runtime,
   kv_backend:
     {Nerves.Runtime.KVBackend.InMemory,

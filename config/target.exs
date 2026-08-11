@@ -24,7 +24,40 @@ config :nerves_runtime, startup_guard_enabled: true
 # configuring erlinit.
 
 # Advance the system clock on devices without a real-time clock.
-config :nerves, :erlinit, update_clock: true
+config :nerves, :erlinit,
+  update_clock: true,
+  hostname_pattern: "usbproxy-%s"
+
+################################################################
+## usbproxy services
+################################################################
+
+# Phoenix endpoint: JSON API, MCP, and /up on the API port from the
+# tailnet ACL. Listener on 0.0.0.0 for Phase 3; reachability is
+# enforced by the tailnet ACL (agents can only reach 3240/4000/7000-7099).
+# secret_key_base is generated at boot (no sessions/cookies on this API).
+config :usb_proxy, UsbProxyWeb.Endpoint,
+  http: [ip: {0, 0, 0, 0}, port: 4000],
+  server: true
+
+# Persistent, size-capped, append-only event log on the data partition.
+# Survives reboots and power cuts; records operationally significant
+# events (boots, binds, attaches, flash operations, recovery actions).
+config :usb_proxy, UsbProxy.EventLog,
+  path: "/data/usb_proxy/events.log",
+  max_bytes: 1_000_000
+
+# tailscaled state lives on the data partition so the node identity
+# survives reboots, power cuts, and firmware updates.
+config :usb_proxy, UsbProxy.Tailscale,
+  state_dir: "/data/tailscale",
+  hostname: "usbproxy",
+  # First boot: `tailscale up` uses an auth key read from (first match wins)
+  #   1. Nerves.Runtime.KV "tailscale_authkey"
+  #   2. the file below (drop it in place over ssh/console once)
+  # After the first join, the state dir carries the identity and no key
+  # is needed again.
+  authkey_file: "/data/tailscale/authkey"
 
 # Configure the device for SSH IEx prompt access and firmware updates
 #
@@ -66,14 +99,8 @@ config :vintage_net,
 
 config :mdns_lite,
   # The `hosts` key specifies what hostnames mdns_lite advertises.  `:hostname`
-  # advertises the device's hostname.local. For the official Nerves systems, this
-  # is "nerves-<4 digit serial#>.local".  The `"nerves"` host causes mdns_lite
-  # to advertise "nerves.local" for convenience. If more than one Nerves device
-  # is on the network, it is recommended to delete "nerves" from the list
-  # because otherwise any of the devices may respond to nerves.local leading to
-  # unpredictable behavior.
-
-  hosts: [:hostname, "nerves"],
+  # advertises the device's hostname.local.
+  hosts: [:hostname, "usbproxy"],
   ttl: 120,
 
   # Advertise the following services over mDNS.
@@ -94,9 +121,3 @@ config :mdns_lite,
       port: 4369
     }
   ]
-
-# Import target specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
-# Uncomment to use target specific configurations
-
-# import_config "#{Mix.target()}.exs"
