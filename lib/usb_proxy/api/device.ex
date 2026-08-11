@@ -24,6 +24,8 @@ defmodule UsbProxy.Api.Device do
       base("/devices")
       index(:read)
       get(:read, path_param_is_composite_key: :id)
+      route(:post, "/:name/exposure", :set_exposure)
+      route(:post, "/:name/mode", :switch_mode)
     end
   end
 
@@ -38,6 +40,58 @@ defmodule UsbProxy.Api.Device do
     read :get do
       description("Fetch one device by its stable name.")
       get_by(:name)
+    end
+
+    action :set_exposure, :map do
+      description("""
+      Override how a device is exposed. exposure=usbip: force USB/IP
+      export even if it presents a serial interface (its console is
+      released). exposure=serial: hand it to the serial console service.
+      exposure=auto: follow automatic classification. Takes effect
+      within a second. Best-effort: a device with no UART set to serial
+      yields a console stuck at adapter_missing.
+      """)
+
+      argument(:name, :string, allow_nil?: false)
+
+      argument(:exposure, :atom,
+        allow_nil?: false,
+        constraints: [one_of: [:usbip, :serial, :auto]]
+      )
+
+      run(fn input, _context ->
+        case UsbProxy.DeviceRegistry.set_exposure(
+               input.arguments.name,
+               input.arguments.exposure
+             ) do
+          {:ok, device} ->
+            {:ok, %{name: device.name, kind: device.kind, exposure: device.exposure}}
+
+          {:error, :not_found} ->
+            {:error, "no device named #{input.arguments.name}"}
+        end
+      end)
+    end
+
+    action :switch_mode, :map do
+      description("""
+      Ask a device to switch modes, best-effort. mode=bootloader: for a
+      serial-exposed MicroPython-style device, inject
+      machine.bootloader() into its REPL — it re-enumerates (keeping its
+      stable name) as its bootloader, typically USB/IP-attachable mass
+      storage for flashing. mode=app: power-cycle the device's port so
+      it boots whatever is on flash (only where power_cyclable; all
+      ports on that hub cycle together). Errors explain what to try
+      instead. Re-query the device afterwards: vid:pid, kind, exposure
+      and busid may all change.
+      """)
+
+      argument(:name, :string, allow_nil?: false)
+      argument(:mode, :string, allow_nil?: false)
+
+      run(fn input, _context ->
+        UsbProxy.ModeSwitch.request(input.arguments.name, input.arguments.mode)
+      end)
     end
   end
 
@@ -123,9 +177,22 @@ defmodule UsbProxy.Api.Device do
       constraints(one_of: [:usbip, :serial, :flash_target])
 
       description("""
-      How this device is meant to be used: :usbip (attach over USB/IP),
-      :serial (a serial console, connect via its TCP port instead),
-      :flash_target (flash via the flash service).
+      What the device IS in its current mode: :serial (presents a serial
+      interface — UART bridge or pure-CDC board), :usbip (everything
+      else, incl. composites). Re-classified live when a device changes
+      modes.
+      """)
+    end
+
+    attribute :exposure, :atom do
+      public?(true)
+      constraints(one_of: [:usbip, :serial])
+
+      description("""
+      How the device is exposed right now. :serial — NOT attachable over
+      USB/IP; use its serial console TCP port (see list_serial_consoles).
+      :usbip — attachable via `usbip attach`. Follows `kind` unless
+      overridden via set_exposure.
       """)
     end
   end
@@ -147,7 +214,8 @@ defmodule UsbProxy.Api.Device do
           present: d.present?,
           bound: d.bound?,
           attached: d.attached?,
-          kind: d.kind
+          kind: d.kind,
+          exposure: d.exposure
         })
       end)
     else

@@ -58,8 +58,13 @@ defmodule UsbProxy.Api.SerialConsole do
 
     attribute :status, :atom do
       public?(true)
-      constraints(one_of: [:up, :adapter_missing])
-      description("Console state: :up (adapter present, port serving) or :adapter_missing.")
+      constraints(one_of: [:up, :adapter_missing, :released])
+
+      description("""
+      Console state: :up (serving), :adapter_missing (device absent,
+      port stays open and resumes on return), :released (device
+      currently exposed as usbip; console idle until exposure flips back).
+      """)
     end
 
     attribute :client_count, :integer do

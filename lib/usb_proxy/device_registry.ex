@@ -64,6 +64,18 @@ defmodule UsbProxy.DeviceRegistry do
     :ok
   end
 
+  @doc """
+  Override how a device is exposed: `:usbip` (bind to usbip-host even if
+  it looks like a serial device), `:serial` (hand it to the console
+  service), or `:auto` (follow classification). Takes effect immediately;
+  best-effort — e.g. `:serial` on a device with no UART yields a console
+  stuck at :adapter_missing.
+  """
+  @spec set_exposure(String.t(), :usbip | :serial | :auto) :: {:ok, map()} | {:error, :not_found}
+  def set_exposure(name, exposure) when exposure in [:usbip, :serial, :auto] do
+    GenServer.call(__MODULE__, {:set_exposure, name, exposure})
+  end
+
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -98,6 +110,27 @@ defmodule UsbProxy.DeviceRegistry do
     case Map.fetch(state.devices, name) do
       {:ok, device} -> {:reply, {:ok, with_live_status(device)}, state}
       :error -> {:reply, :error, state}
+    end
+  end
+
+  def handle_call({:set_exposure, name, requested}, _from, state) do
+    case Map.fetch(state.devices, name) do
+      :error ->
+        {:reply, {:error, :not_found}, state}
+
+      {:ok, device} ->
+        override = if requested == :auto, do: nil, else: requested
+        Logger.info("exposure for #{name} set to #{requested}")
+        UsbProxy.EventLog.append(:exposure_set, %{name: name, exposure: requested})
+
+        state =
+          %{
+            state
+            | devices: Map.put(state.devices, name, %{device | exposure_override: override})
+          }
+          |> reconcile()
+
+        {:reply, {:ok, with_live_status(state.devices[name])}, state}
     end
   end
 
@@ -192,6 +225,7 @@ defmodule UsbProxy.DeviceRegistry do
           hub: parent_busid(seen.busid),
           power_cyclable?: power_cyclable?(seen.busid),
           kind: classify(seen),
+          exposure_override: nil,
           present?: true,
           bound?: false,
           removed_at: nil,
@@ -200,13 +234,38 @@ defmodule UsbProxy.DeviceRegistry do
     end
   end
 
-  # Dedicated USB-UART bridge chips become serial consoles instead of
-  # USB/IP exports. Deliberately narrow: CDC-ACM boards like a Pico
-  # stay :usbip — they're usually the device under test (flash target),
-  # not lab wiring.
+  # Classification: what the device IS in its current mode, highest
+  # level wins. Dedicated UART bridges and pure-CDC devices (e.g. a Pico
+  # running MicroPython — nothing but CDC control+data interfaces) are
+  # :serial. Composites (net+storage+acm gadgets) and everything else
+  # are :usbip — exposed whole over USB/IP.
   @serial_vids ~w(0403 10c4 1a86 067b)
+
   defp classify(%{vid: vid}) when vid in @serial_vids, do: :serial
+
+  defp classify(%{interface_classes: classes})
+       when classes != [] do
+    # Pure serial = nothing but CDC-ACM control (02/02) and CDC data
+    # (0a/xx) interfaces. Class 02 alone is NOT enough: CDC-ECM/NCM
+    # gadget networking (02/06, 02/0d) shares the class, and those
+    # composites (e.g. a Linux gadget with net+acm+storage) must be
+    # exposed whole over USB/IP.
+    if Enum.all?(classes, fn
+         {0x02, 0x02} -> true
+         {0x0A, _subclass} -> true
+         _ -> false
+       end),
+       do: :serial,
+       else: :usbip
+  end
+
   defp classify(_seen), do: :usbip
+
+  # How the device is exposed to agents: an explicit override wins,
+  # otherwise it follows the classification.
+  defp exposure(%{exposure_override: override}) when override != nil, do: override
+  defp exposure(%{kind: :serial}), do: :serial
+  defp exposure(_device), do: :usbip
 
   defp match_known(devices, seen) do
     known = Map.values(devices)
@@ -305,30 +364,30 @@ defmodule UsbProxy.DeviceRegistry do
 
   defp ensure_bound(%{present?: false} = device), do: device
 
-  # Serial adapters are NOT exported over USB/IP: their local kernel
-  # driver stays attached so the serial console service (Phase 6) can
-  # own the tty. If one is wrongly bound (e.g. before it was classified),
-  # release it so the normal driver re-probes.
-  defp ensure_bound(%{kind: :serial} = device) do
-    if current_driver(device.busid) == "usbip-host" do
-      case System.cmd(@usbip, ["unbind", "-b", device.busid], stderr_to_stdout: true) do
-        {_out, 0} ->
-          Logger.info("released #{device.name} (#{device.busid}) for serial console use")
-          UsbProxy.EventLog.append(:device_unbound, %{name: device.name, busid: device.busid})
-
-        {out, _code} ->
-          Logger.warning("unbind failed for #{device.name}: #{String.trim(out)}")
-      end
-    end
-
-    %{device | bound?: false}
-  end
-
   defp ensure_bound(device) do
-    if current_driver(device.busid) == "usbip-host" do
-      %{device | bound?: true}
-    else
-      bind(device)
+    case {exposure(device), current_driver(device.busid) == "usbip-host"} do
+      # Serial-exposed devices keep their local kernel driver so the
+      # console service can own the tty; release if wrongly bound.
+      {:serial, true} ->
+        case System.cmd(@usbip, ["unbind", "-b", device.busid], stderr_to_stdout: true) do
+          {_out, 0} ->
+            Logger.info("released #{device.name} (#{device.busid}) for serial console use")
+            UsbProxy.EventLog.append(:device_unbound, %{name: device.name, busid: device.busid})
+
+          {out, _code} ->
+            Logger.warning("unbind failed for #{device.name}: #{String.trim(out)}")
+        end
+
+        %{device | bound?: false}
+
+      {:serial, false} ->
+        %{device | bound?: false}
+
+      {:usbip, true} ->
+        %{device | bound?: true}
+
+      {:usbip, false} ->
+        bind(device)
     end
   end
 
@@ -369,11 +428,16 @@ defmodule UsbProxy.DeviceRegistry do
   ## Live status (read fresh at query time so attach state is current)
 
   defp with_live_status(%{present?: false} = device),
-    do: Map.merge(device, %{bound?: false, attached?: false})
+    do: Map.merge(device, %{bound?: false, attached?: false, exposure: exposure(device)})
 
   defp with_live_status(device) do
     bound? = current_driver(device.busid) == "usbip-host"
-    Map.merge(device, %{bound?: bound?, attached?: bound? and usbip_status(device.busid) == 2})
+
+    Map.merge(device, %{
+      bound?: bound?,
+      attached?: bound? and usbip_status(device.busid) == 2,
+      exposure: exposure(device)
+    })
   end
 
   defp current_driver(busid) do
@@ -420,10 +484,40 @@ defmodule UsbProxy.DeviceRegistry do
           serial: sysfs_attr(busid, "serial"),
           product: sysfs_attr(busid, "product"),
           manufacturer: sysfs_attr(busid, "manufacturer"),
-          class: sysfs_attr(busid, "bDeviceClass")
+          class: sysfs_attr(busid, "bDeviceClass"),
+          interface_classes: interface_classes(busid)
         }
     end
   end
+
+  # Interface classes parsed from the raw descriptors file — the sysfs
+  # interface subdirectories vanish once usbip-host owns the device, so
+  # this is the only driver-independent source.
+  defp interface_classes(busid) do
+    case File.read(Path.join([@sysfs, busid, "descriptors"])) do
+      {:ok, binary} -> parse_interface_classes(binary, [])
+      _ -> []
+    end
+  end
+
+  defp parse_interface_classes(<<len, _type, _::binary>> = binary, acc)
+       when len > 0 and byte_size(binary) >= len do
+    <<descriptor::binary-size(^len), rest::binary>> = binary
+
+    acc =
+      case descriptor do
+        # bDescriptorType 4 = interface; class at offset 5, subclass at 6
+        <<_len, 4, _num, _alt, _num_endpoints, class, subclass, _::binary>> ->
+          [{class, subclass} | acc]
+
+        _ ->
+          acc
+      end
+
+    parse_interface_classes(rest, acc)
+  end
+
+  defp parse_interface_classes(_rest, acc), do: acc |> Enum.reverse() |> Enum.uniq()
 
   defp hub?(%{class: "09"}), do: true
   defp hub?(_), do: false

@@ -37,6 +37,10 @@ defmodule UsbProxy.Api do
       """)
     end
 
+    tool(:set_device_exposure, UsbProxy.Api.Device, :set_exposure)
+
+    tool(:switch_device_mode, UsbProxy.Api.Device, :switch_mode)
+
     tool :list_serial_consoles, UsbProxy.Api.SerialConsole, :read do
       description("""
       List serial consoles this usbproxy exports. Each console maps a

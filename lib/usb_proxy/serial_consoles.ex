@@ -74,13 +74,24 @@ defmodule UsbProxy.SerialConsoles.Manager do
     {:reply, consoles, state}
   end
 
-  # A console worker is started the first time a serial device is seen
-  # and lives for the rest of the boot: the port mapping must survive
-  # the adapter being replugged (any port, any time).
+  def handle_call({:worker_pid, name}, _from, state) do
+    case state.consoles[name] do
+      %{pid: pid} -> {:reply, {:ok, pid}, state}
+      nil -> {:reply, {:error, :no_console}, state}
+    end
+  end
+
+  @doc false
+  def worker_pid(name), do: GenServer.call(__MODULE__, {:worker_pid, name})
+
+  # A console worker is started the first time a serial-exposed device
+  # is seen and lives for the rest of the boot: the port mapping must
+  # survive the adapter being replugged (any port, any time) and
+  # exposure round-trips through :usbip.
   defp reconcile(state) do
     serial_devices =
       UsbProxy.DeviceRegistry.list()
-      |> Enum.filter(&(&1.kind == :serial))
+      |> Enum.filter(&(&1.exposure == :serial))
 
     Enum.reduce(serial_devices, state, fn device, state ->
       case state.consoles[device.name] do
@@ -136,6 +147,9 @@ defmodule UsbProxy.SerialConsoles.Worker do
 
   def status(pid), do: GenServer.call(pid, :status)
 
+  @doc "Write bytes to the UART (used by ModeSwitch for REPL sequences)."
+  def inject(pid, data), do: GenServer.call(pid, {:inject, data})
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -159,6 +173,10 @@ defmodule UsbProxy.SerialConsoles.Worker do
       tty: nil
     }
 
+    # Re-check the UART when the registry sees changes: a mode switch
+    # re-enumerates the device and can leave a stale open handle behind.
+    Phoenix.PubSub.subscribe(UsbProxy.PubSub, "device_registry")
+
     start_acceptor(state)
     {:ok, state, {:continue, :open_uart}}
   end
@@ -168,15 +186,43 @@ defmodule UsbProxy.SerialConsoles.Worker do
 
   @impl true
   def handle_call(:status, _from, state) do
-    {:reply,
-     %{
-       status: if(state.uart, do: :up, else: :adapter_missing),
-       client_count: if(state.client, do: 1, else: 0)
-     }, state}
+    status =
+      cond do
+        state.uart -> :up
+        exposure(state.name) != :serial -> :released
+        true -> :adapter_missing
+      end
+
+    {:reply, %{status: status, client_count: if(state.client, do: 1, else: 0)}, state}
+  end
+
+  def handle_call({:inject, data}, _from, state) do
+    if state.uart do
+      {:reply, Circuits.UART.write(state.uart, data), state}
+    else
+      {:reply, {:error, :no_uart}, state}
+    end
   end
 
   @impl true
   def handle_info(:open_uart, state), do: {:noreply, try_open_uart(state)}
+
+  def handle_info(:devices_changed, state) do
+    cond do
+      state.uart == nil ->
+        {:noreply, state}
+
+      # Device gone, re-enumerated elsewhere, mode-changed (different
+      # tty), or released to usbip: drop the handle and let the retry
+      # loop reopen against reality.
+      stale_uart?(state) ->
+        Logger.info("console #{state.name}: device changed; reopening UART")
+        {:noreply, close_uart(state)}
+
+      true ->
+        {:noreply, state}
+    end
+  end
 
   # New TCP client (handed over by the acceptor). Single-client:
   # a new connection replaces the current one.
@@ -246,8 +292,24 @@ defmodule UsbProxy.SerialConsoles.Worker do
     %{state | uart: nil, tty: nil}
   end
 
+  defp stale_uart?(state) do
+    case UsbProxy.DeviceRegistry.get(state.name) do
+      {:ok, %{present?: true, exposure: :serial} = device} ->
+        find_tty(device.busid) != state.tty
+
+      _ ->
+        true
+    end
+  end
+
+  # Already open: never stack a second UART (stale-close paths can
+  # schedule multiple retries).
+  defp try_open_uart(%{uart: uart} = state) when uart != nil, do: state
+
   defp try_open_uart(state) do
     with {:ok, device} <- UsbProxy.DeviceRegistry.get(state.name),
+         # Released to usbip? Stand down; keep polling for exposure flips.
+         :serial <- device.exposure,
          true <- device.present? || :absent,
          tty when is_binary(tty) <- find_tty(device.busid) do
       {:ok, uart} = Circuits.UART.start_link()
@@ -288,6 +350,13 @@ defmodule UsbProxy.SerialConsoles.Worker do
   defp speed() do
     Application.get_env(:usb_proxy, UsbProxy.SerialConsoles, [])
     |> Keyword.get(:speed, @default_speed)
+  end
+
+  defp exposure(name) do
+    case UsbProxy.DeviceRegistry.get(name) do
+      {:ok, device} -> device.exposure
+      _ -> :serial
+    end
   end
 
   defp start_acceptor(state) do
