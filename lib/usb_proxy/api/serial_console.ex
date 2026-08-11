@@ -70,8 +70,11 @@ defmodule UsbProxy.Api.SerialConsole do
 
   @doc false
   def records() do
-    # Phase 6 wires this to the live serial console service.
-    []
+    if Process.whereis(UsbProxy.SerialConsoles.Manager) do
+      Enum.map(UsbProxy.SerialConsoles.list(), &struct!(__MODULE__, &1))
+    else
+      []
+    end
   end
 end
 

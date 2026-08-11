@@ -112,6 +112,8 @@ defmodule UsbProxy.DeviceRegistry do
       |> then(&Enum.reduce(scanned, &1, fn seen, acc -> upsert(acc, seen) end))
       |> Map.new(fn {name, device} -> {name, ensure_bound(device)} end)
 
+    Phoenix.PubSub.broadcast(UsbProxy.PubSub, "device_registry", :devices_changed)
+
     %{state | devices: devices} |> schedule(@periodic_ms)
   end
 
@@ -189,7 +191,7 @@ defmodule UsbProxy.DeviceRegistry do
           busid: seen.busid,
           hub: parent_busid(seen.busid),
           power_cyclable?: power_cyclable?(seen.busid),
-          kind: :usbip,
+          kind: classify(seen),
           present?: true,
           bound?: false,
           removed_at: nil,
@@ -197,6 +199,14 @@ defmodule UsbProxy.DeviceRegistry do
         })
     end
   end
+
+  # Dedicated USB-UART bridge chips become serial consoles instead of
+  # USB/IP exports. Deliberately narrow: CDC-ACM boards like a Pico
+  # stay :usbip — they're usually the device under test (flash target),
+  # not lab wiring.
+  @serial_vids ~w(0403 10c4 1a86 067b)
+  defp classify(%{vid: vid}) when vid in @serial_vids, do: :serial
+  defp classify(_seen), do: :usbip
 
   defp match_known(devices, seen) do
     known = Map.values(devices)
@@ -255,6 +265,7 @@ defmodule UsbProxy.DeviceRegistry do
           busid: seen.busid,
           hub: parent_busid(seen.busid),
           power_cyclable?: power_cyclable?(seen.busid),
+          kind: classify(seen),
           present?: true,
           removed_at: nil
       }
@@ -293,6 +304,25 @@ defmodule UsbProxy.DeviceRegistry do
   ## Binding
 
   defp ensure_bound(%{present?: false} = device), do: device
+
+  # Serial adapters are NOT exported over USB/IP: their local kernel
+  # driver stays attached so the serial console service (Phase 6) can
+  # own the tty. If one is wrongly bound (e.g. before it was classified),
+  # release it so the normal driver re-probes.
+  defp ensure_bound(%{kind: :serial} = device) do
+    if current_driver(device.busid) == "usbip-host" do
+      case System.cmd(@usbip, ["unbind", "-b", device.busid], stderr_to_stdout: true) do
+        {_out, 0} ->
+          Logger.info("released #{device.name} (#{device.busid}) for serial console use")
+          UsbProxy.EventLog.append(:device_unbound, %{name: device.name, busid: device.busid})
+
+        {out, _code} ->
+          Logger.warning("unbind failed for #{device.name}: #{String.trim(out)}")
+      end
+    end
+
+    %{device | bound?: false}
+  end
 
   defp ensure_bound(device) do
     if current_driver(device.busid) == "usbip-host" do

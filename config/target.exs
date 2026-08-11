@@ -45,6 +45,11 @@ config :usb_proxy, UsbProxyWeb.Endpoint,
 # power_cyclable: false and can only be logically re-enumerated.
 config :usb_proxy, UsbProxy.DeviceRegistry, power_cyclable_hubs: ["1-1"]
 
+# Serial consoles: TCP ports from the ACL'd range, default UART speed.
+config :usb_proxy, UsbProxy.SerialConsoles,
+  port_range: 7000..7099,
+  speed: 115_200
+
 # Persistent, size-capped, append-only event log on the data partition.
 # Survives reboots and power cuts; records operationally significant
 # events (boots, binds, attaches, flash operations, recovery actions).

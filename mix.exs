@@ -55,6 +55,9 @@ defmodule UsbProxy.MixProject do
       # Supervised external daemons (tailscaled, usbipd)
       {:muontrap, "~> 1.8"},
 
+      # Serial console service (UART <-> TCP)
+      {:circuits_uart, "~> 1.6"},
+
       # Allow Nerves.Runtime on host to support development, testing and CI.
       # See config/host.exs for usage.
       {:nerves_runtime, "~> 0.13.12"},

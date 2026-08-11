@@ -60,8 +60,9 @@ defmodule UsbProxy.Application do
         {UsbProxy.DaemonKeeper, id: :usbipd, command: "/usr/sbin/usbipd", args: []},
         # Enumerates, names, and binds USB devices; reconciles on
         # boot, hotplug, and a periodic timer.
-        UsbProxy.DeviceRegistry
-        # Phase 6: UsbProxy.SerialConsoles
+        UsbProxy.DeviceRegistry,
+        # UART <-> TCP consoles for kind: :serial devices (7000-7099).
+        UsbProxy.SerialConsoles
       ]
     end
   end
