@@ -26,22 +26,9 @@ defmodule UsbProxy.Tailscale do
   @impl true
   def init(_opts) do
     config = Application.fetch_env!(:usb_proxy, __MODULE__)
-    state_dir = Keyword.fetch!(config, :state_dir)
-    File.mkdir_p!(state_dir)
 
     children = [
-      {MuonTrap.Daemon,
-       [
-         @tailscaled,
-         [
-           "--statedir=#{state_dir}",
-           "--socket=#{socket_path()}",
-           # No iptables/nftables userspace on the box; tailnet ACL
-           # filtering happens in tailscaled's own data plane.
-           "--netfilter-mode=off"
-         ],
-         [name: :tailscaled, log_output: :debug, stderr_to_stdout: true]
-       ]},
+      {UsbProxy.Tailscale.DaemonKeeper, config},
       {UsbProxy.Tailscale.Up, config}
     ]
 
@@ -71,6 +58,73 @@ defmodule UsbProxy.Tailscale do
     case System.cmd(@tailscale, ["--socket=#{socket_path()}" | args], stderr_to_stdout: true) do
       {out, 0} -> {:ok, out}
       {out, code} -> {:error, {code, out}}
+    end
+  end
+end
+
+defmodule UsbProxy.Tailscale.DaemonKeeper do
+  @moduledoc """
+  Keeps tailscaled running with retry-forever semantics.
+
+  A plain supervised MuonTrap.Daemon that insta-fails (bad flag, corrupt
+  state, missing binary) blows the restart budget and takes the whole
+  application down — Phoenix, ssh consoles, everything. This box must
+  degrade instead: if tailscaled won't run, the rest keeps serving and
+  the event log records the flapping.
+
+  tailscaled needs no netfilter flags: without iptables binaries it
+  falls back to nftables over netlink, which the kernel provides.
+  """
+
+  use GenServer
+  require Logger
+
+  @retry_ms 5_000
+
+  def start_link(config) do
+    GenServer.start_link(__MODULE__, config, name: __MODULE__)
+  end
+
+  @impl true
+  def init(config) do
+    Process.flag(:trap_exit, true)
+    state_dir = Keyword.fetch!(config, :state_dir)
+    File.mkdir_p!(state_dir)
+    {:ok, %{state_dir: state_dir, daemon: nil}, {:continue, :start_daemon}}
+  end
+
+  @impl true
+  def handle_continue(:start_daemon, state), do: {:noreply, start_daemon(state)}
+
+  @impl true
+  def handle_info(:start_daemon, state), do: {:noreply, start_daemon(state)}
+
+  def handle_info({:EXIT, pid, reason}, %{daemon: pid} = state) do
+    Logger.warning("tailscaled exited (#{inspect(reason)}); retrying in #{@retry_ms}ms")
+    UsbProxy.EventLog.append(:tailscaled_exit, %{reason: inspect(reason)})
+    Process.send_after(self(), :start_daemon, @retry_ms)
+    {:noreply, %{state | daemon: nil}}
+  end
+
+  def handle_info({:EXIT, _other, _reason}, state), do: {:noreply, state}
+
+  defp start_daemon(state) do
+    args = [
+      "--statedir=#{state.state_dir}",
+      "--socket=#{UsbProxy.Tailscale.socket_path()}"
+    ]
+
+    case MuonTrap.Daemon.start_link(UsbProxy.Tailscale.tailscaled_bin(), args,
+           log_output: :debug,
+           stderr_to_stdout: true
+         ) do
+      {:ok, pid} ->
+        %{state | daemon: pid}
+
+      {:error, reason} ->
+        Logger.warning("tailscaled failed to start (#{inspect(reason)}); retrying")
+        Process.send_after(self(), :start_daemon, @retry_ms)
+        state
     end
   end
 end
