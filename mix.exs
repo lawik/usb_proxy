@@ -64,9 +64,12 @@ defmodule UsbProxy.MixProject do
 
       # Custom system: nerves_system_rpi4 fork with USBIP_CORE/USBIP_HOST,
       # usbip userspace tools, dfu-util, uhubctl, usbutils, eudev.
-      # TODO: flip to {:nerves_system_rpi4, github: "lawik/nerves_system_rpi4",
-      # branch: "usbip", ...} once the branch is pushed.
-      {:nerves_system_rpi4, path: "../nerves_system_rpi4", runtime: false, targets: :rpi4}
+      # Prebuilt artifact comes from the fork's GitHub releases.
+      {:nerves_system_rpi4,
+       github: "lawik/nerves_system_rpi4",
+       branch: "usbip",
+       runtime: false,
+       targets: :rpi4}
     ]
   end
 
