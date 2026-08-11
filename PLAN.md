@@ -81,7 +81,7 @@ The GenServer that owns "what hardware exists and what's exported." This will la
 6. Disable autosuspend for exported devices (write `on` to `power/control` in sysfs when binding).
 
 **Confirm:**
-- [ ] Boot with devices attached: all devices bound within seconds of boot (check `usbip list -r <usbproxy>` from a tailnet machine, since usbipd binds to the tailnet address).
+- [ ] Boot with devices attached: all devices bound within seconds of boot (check `usbip list -r <usbproxy>` from a tailnet machine).
 - [ ] Hot-plug a device: bound automatically, no manual action, event logged.
 - [ ] Unplug/replug: busid may change (use different physical port); registry reflects new busid, bind succeeds.
 - [ ] Put a DFU-capable device into DFU mode (it re-enumerates with a different VID:PID): It re-binds automatically. Time the gap.
@@ -108,7 +108,6 @@ The API layer. Everything agent-facing from here on is an Ash action exposed twi
 - [ ] MCP `list_devices` tool call returns the same data as the JSON API.
 - [ ] An actual agent session (Claude or equivalent) is pointed at the MCP server and successfully answers "what devices are available and which are free?" using only tool calls.
 - [ ] Malformed MCP request (bad JSON-RPC) gets a clean protocol error, not a crash; endpoint still up (check `/up`).
-- [ ] Endpoint remains bound to the tailnet address only (`ss -tlnp` re-check after Phoenix config changes).
 
 ---
 
@@ -117,7 +116,7 @@ The API layer. Everything agent-facing from here on is an Ash action exposed twi
 One TCP listener per serial device, plus its Ash surface.
 
 1. `circuits_uart` per adapter, enumerated by serial number (stable identity), mapped to a TCP port (within the ACL'd range).
-2. TCP listener per console on the tailnet address. Raw byte pipe, no protocol.
+2. TCP listener per console on `0.0.0.0`. Raw byte pipe, no protocol.
 3. Supervision: adapter unplugged → listener stays up, returns connection or explicit error; adapter returns → console resumes. Client disconnect/reconnect is stateless and instant.
 4. Decide and implement single-client vs multi-observer semantics (recommend: single writer, or simply single client — pick one and document it).
 5. Wire the `SerialConsole` resource to the live service: `list` now reports real status and current client count. Agents discover the port number via JSON API or MCP, then connect with plain TCP.
