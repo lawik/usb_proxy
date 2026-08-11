@@ -271,12 +271,23 @@ defmodule UsbProxy.DeviceRegistry do
 
   # Whether a :vbus recovery can truly cut this device's power: only on
   # hubs with verified working VBUS switching. All-or-nothing per hub.
+  # The config default covers the platform (the Pi 4's built-in hub);
+  # bench-specific additions (e.g. a PPPS-capable external hub, whose
+  # busid depends on where it's plugged in) go in the KV store per
+  # device: `Nerves.Runtime.KV.put("power_cyclable_hubs", "1-1,1-1.3")`.
   defp power_cyclable?(busid) do
-    hubs =
-      Application.get_env(:usb_proxy, __MODULE__, [])
-      |> Keyword.get(:power_cyclable_hubs, ["1-1"])
+    parent_busid(busid) in power_cyclable_hubs()
+  end
 
-    parent_busid(busid) in hubs
+  defp power_cyclable_hubs() do
+    case Nerves.Runtime.KV.get("power_cyclable_hubs") do
+      kv when is_binary(kv) and kv != "" ->
+        kv |> String.split(",") |> Enum.map(&String.trim/1)
+
+      _ ->
+        Application.get_env(:usb_proxy, __MODULE__, [])
+        |> Keyword.get(:power_cyclable_hubs, ["1-1"])
+    end
   end
 
   ## Binding

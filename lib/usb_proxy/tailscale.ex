@@ -141,10 +141,19 @@ defmodule UsbProxy.Tailscale.Up do
         )
 
       key ->
+        # Per-device override so a fleet burned from one firmware can be
+        # named individually (KV "tailscale_hostname", set at burn or
+        # over ssh). Falls back to the configured default.
+        hostname =
+          case Nerves.Runtime.KV.get("tailscale_hostname") do
+            name when is_binary(name) and name != "" -> name
+            _ -> config[:hostname] || "usbproxy"
+          end
+
         args = [
           "up",
           "--auth-key=#{key}",
-          "--hostname=#{config[:hostname] || "usbproxy"}",
+          "--hostname=#{hostname}",
           # vintage_net owns resolv.conf; don't fight over it.
           "--accept-dns=false"
         ]
