@@ -55,18 +55,18 @@ config :usb_proxy, UsbProxy.SerialConsoles,
 # the tailnet (agents); the ACL must allow udp:69 plus the ephemeral
 # transfer ports below, since TFTP moves each transfer off port 69.
 #
-# max_file_bytes is capped by the protocol, not by us: 16-bit block
-# numbers put the ceiling at 65535 * blksize — 32 MiB at the default
-# 512-byte blocks, ~92 MiB when a client negotiates blksize=1468. A
-# larger cap here has no effect; oversized transfers are refused with
-# an explanation instead of failing partway through.
+# max_file_bytes sits just under the protocol's own ceiling
+# (65535 * blksize) so it is never the binding constraint — clients
+# then get the error that tells them to raise blksize. max_total_bytes
+# is the one that matters: the event log and tailscaled's state share
+# this partition, so it must not fill.
 config :usb_proxy, UsbProxy.Tftp,
   root: "/data/usb_proxy/tftp",
   port: 69,
   data_ports: 6900..6999,
   max_conn: 16,
-  max_file_bytes: 96_000_000,
-  max_total_bytes: 1_000_000_000
+  max_file_bytes: 4_000_000_000,
+  max_total_bytes: 5_000_000_000
 
 # Persistent, size-capped, append-only event log on the data partition.
 # Survives reboots and power cuts; records operationally significant
