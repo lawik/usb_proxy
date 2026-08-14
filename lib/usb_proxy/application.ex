@@ -64,7 +64,10 @@ defmodule UsbProxy.Application do
         # boot, hotplug, and a periodic timer.
         UsbProxy.DeviceRegistry,
         # UART <-> TCP consoles for kind: :serial devices (7000-7099).
-        UsbProxy.SerialConsoles
+        UsbProxy.SerialConsoles,
+        # Read/write TFTP on 69 for netbooting boards and agent file
+        # transfer; one flat directory on the data partition.
+        UsbProxy.Tftp
       ]
     end
   end

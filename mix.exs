@@ -24,7 +24,9 @@ defmodule UsbProxy.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :runtime_tools],
+      # :tftp is OTP's own TFTP client/server (split out of :inets in
+      # OTP 21); usbproxy uses the server half. See UsbProxy.Tftp.
+      extra_applications: [:logger, :runtime_tools, :tftp],
       mod: {UsbProxy.Application, []}
     ]
   end

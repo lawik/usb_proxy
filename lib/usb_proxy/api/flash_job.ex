@@ -35,8 +35,9 @@ defmodule UsbProxy.Api.FlashJob do
     create :create do
       description("""
       Flash a device with a previously uploaded image. Upload the image
-      via HTTP first (POST /api/images, arrives in Phase 8), then pass
-      the returned image ref here together with the device's stable name.
+      over TFTP first (UDP 69 — see list_tftp_files), then pass its
+      filename here as the image ref, together with the device's stable
+      name.
       """)
 
       accept([:device_name, :image_ref])

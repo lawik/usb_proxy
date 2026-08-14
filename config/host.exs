@@ -12,6 +12,16 @@ config :usb_proxy, UsbProxyWeb.Endpoint,
 # Event log goes to a temp dir on the host.
 config :usb_proxy, UsbProxy.EventLog, path: "/tmp/usb_proxy_dev/events.log"
 
+# TFTP is not started on the host (port 69 is privileged and the dev
+# machine has its own network); tests start isolated instances on a
+# high port with a temp root. Defaults are here so they can.
+config :usb_proxy, UsbProxy.Tftp,
+  root: "/tmp/usb_proxy_dev/tftp",
+  port: 6969,
+  data_ports: 6900..6999,
+  max_file_bytes: 96_000_000,
+  max_total_bytes: 1_000_000_000
+
 config :nerves_runtime,
   kv_backend:
     {Nerves.Runtime.KVBackend.InMemory,

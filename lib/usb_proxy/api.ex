@@ -56,6 +56,33 @@ defmodule UsbProxy.Api do
       """)
     end
 
+    tool :list_tftp_files, UsbProxy.Api.TftpFile, :read do
+      description("""
+      List the files in this usbproxy's TFTP directory. The usbproxy
+      runs a read/write TFTP server on UDP port 69 — use it to move
+      files in either direction: `tftp -m binary <usbproxy> -c put
+      image.fw` to upload, `-c get` to download. Target boards on the
+      lab network use the same server to netboot (`tftpboot` from their
+      bootloader, driven over whichever serial console or USB/IP path
+      you already hold).
+
+      The namespace is flat and shared with every other client: no
+      directories (a request for `boot/zImage` is served `zImage`), no
+      authentication, and uploading a name that already exists replaces
+      it for everyone. Pick distinctive filenames. Uploads are atomic —
+      a board can never read a half-written file — and appear in this
+      list only once complete.
+      """)
+    end
+
+    tool :delete_tftp_file, UsbProxy.Api.TftpFile, :delete do
+      description("""
+      Delete a file from the TFTP directory. The directory is byte-
+      capped and shared, so clean up images you are done with —
+      uploads fail with 'disk full' once the cap is reached.
+      """)
+    end
+
     tool :list_serial_consoles, UsbProxy.Api.SerialConsole, :read do
       description("""
       List serial consoles this usbproxy exports. Each console maps a
@@ -88,6 +115,11 @@ defmodule UsbProxy.Api do
 
     resource UsbProxy.Api.FlashJob do
       define(:list_flash_jobs, action: :read)
+    end
+
+    resource UsbProxy.Api.TftpFile do
+      define(:list_tftp_files, action: :read)
+      define(:delete_tftp_file, action: :delete, args: [:name])
     end
   end
 end

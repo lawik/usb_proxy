@@ -15,6 +15,18 @@ checklists.
   nodes reach `tag:usbproxy` on ports 3240 (usbip), 4000 (API/MCP/health)
   and 7000–7099 (serial consoles) — nothing else, in either direction.
   The HTTP endpoint deliberately has no auth plug.
+- **TFTP is the file transfer** (`UsbProxy.Tftp`, UDP 69 + transfer
+  ports 6900–6999). Read *and* write, one flat directory on the data
+  partition, no authentication and no namespacing — the same server
+  answers target boards netbooting off the lab LAN and agents pushing
+  images over the tailnet, and it does not tell them apart. Uploads are
+  atomic (temp file + rename), so a board never reads half an image.
+  Agents discover and clean up files through the API/MCP
+  (`list_tftp_files`, `delete_tftp_file`); the bytes never go through
+  HTTP. Note the protocol's own ceiling: 16-bit block numbers cap a
+  transfer at 65535 × blksize — 32 MiB with default 512-byte blocks,
+  ~92 MiB at blksize 1468 — and oversized files are refused up front
+  with an explanation rather than failing halfway.
 - **Boot reconciliation only.** The box assumes nothing about prior
   state on startup; power cuts are routine, clean shutdown is not a
   concept. Anything that depends on a shutdown handler is a bug.

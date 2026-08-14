@@ -50,6 +50,24 @@ config :usb_proxy, UsbProxy.SerialConsoles,
   port_range: 7000..7099,
   speed: 115_200
 
+# Read/write TFTP, one flat directory, for netbooting lab targets and
+# for agent file transfer. Reachable both from the lab LAN (boards) and
+# the tailnet (agents); the ACL must allow udp:69 plus the ephemeral
+# transfer ports below, since TFTP moves each transfer off port 69.
+#
+# max_file_bytes is capped by the protocol, not by us: 16-bit block
+# numbers put the ceiling at 65535 * blksize — 32 MiB at the default
+# 512-byte blocks, ~92 MiB when a client negotiates blksize=1468. A
+# larger cap here has no effect; oversized transfers are refused with
+# an explanation instead of failing partway through.
+config :usb_proxy, UsbProxy.Tftp,
+  root: "/data/usb_proxy/tftp",
+  port: 69,
+  data_ports: 6900..6999,
+  max_conn: 16,
+  max_file_bytes: 96_000_000,
+  max_total_bytes: 1_000_000_000
+
 # Persistent, size-capped, append-only event log on the data partition.
 # Survives reboots and power cuts; records operationally significant
 # events (boots, binds, attaches, flash operations, recovery actions).
