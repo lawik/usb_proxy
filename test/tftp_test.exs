@@ -33,11 +33,8 @@ defmodule UsbProxy.TftpTest do
   ## Client helpers — OTP's tftp client with the in-memory callback.
   #
   # Two quirks of that client, so nobody chases them as server bugs:
-  # every read costs a flat 3 seconds because the client dallies for
-  # its full timeout after sending the final ACK (curl and busybox
-  # tftp complete the same transfer in single-digit milliseconds), and
-  # errors arrive as {phase, Code, Text} where only Code and Text came
-  # off the wire.
+  # every read costs a flat 3s (it dallies after the final ACK; curl
+  # takes milliseconds), and errors arrive as {phase, Code, Text}.
   defp get(port, name, options \\ []) do
     :tftp.read_file(to_charlist(name), :binary, [{:host, ~c"127.0.0.1"}, {:port, port} | options])
   end
@@ -64,8 +61,8 @@ defmodule UsbProxy.TftpTest do
 
     test "a file whose size is an exact multiple of the block size round-trips",
          %{port: port} do
-      # The classic TFTP off-by-one: the transfer only ends on a short
-      # block, so an exact multiple needs a trailing empty one.
+      # The transfer only ends on a short block, so an exact multiple
+      # needs a trailing empty one.
       image = :crypto.strong_rand_bytes(512 * 4)
 
       assert {:ok, _} = put(port, "aligned", image)
@@ -73,7 +70,7 @@ defmodule UsbProxy.TftpTest do
     end
 
     # The server must not reduce it: OTP's client ignores a reduction
-    # on upload and stalls until the transfer times out.
+    # on upload and stalls.
     test "a client's requested blksize is honoured in both directions", %{port: port} do
       image = :crypto.strong_rand_bytes(20_000)
 
@@ -86,8 +83,7 @@ defmodule UsbProxy.TftpTest do
     end
 
     # Through the callback: OTP's client refuses netascii-to-binary
-    # before a packet leaves the machine, so the wire cannot carry this
-    # case here.
+    # before a packet leaves the machine.
     test "netascii is refused rather than silently corrupting an image", %{root: root} do
       File.write!(Path.join(root, "img"), <<0, 13, 10, 255>>)
       initial = %{root: root, max_file_bytes: 100_000, max_total_bytes: 200_000}
@@ -134,10 +130,8 @@ defmodule UsbProxy.TftpTest do
   end
 
   describe "atomic writes" do
-    # Driven through the callback rather than the wire: pausing a real
-    # transfer mid-flight is a race, and the guarantee under test is
-    # exactly that nothing is visible between the first block and the
-    # last one.
+    # Through the callback: pausing a real transfer mid-flight is a
+    # race.
     test "an upload is invisible until it completes", %{root: root} do
       alias UsbProxy.Tftp.Store
 
@@ -202,9 +196,8 @@ defmodule UsbProxy.TftpTest do
 
     test "a file too big for 16-bit block numbers is refused up front, not mid-transfer",
          %{port: port, root: root} do
-      # 65535 * 512 + 1 bytes: one block past what the protocol can
-      # number at the default block size. Written directly, since
-      # uploading it would hit the same ceiling.
+      # One block past what the protocol can number at 512-byte blocks.
+      # Written directly; uploading it would hit the same ceiling.
       File.write!(Path.join(root, "huge"), :binary.copy(<<0>>, 65_535 * 512 + 1))
 
       assert {:error, {_, :undef, text}} = get(port, "huge")

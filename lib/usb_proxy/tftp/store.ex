@@ -4,23 +4,16 @@ defmodule UsbProxy.Tftp.Store do
 
   Server-side only. What it adds over OTP's `tftp_file`:
 
-    * **Flat namespace.** Directory components in a request are
-      stripped, so a board configured for `pxelinux.cfg/default` and an
-      agent uploading `default` are talking about the same file. No
-      subdirectories are created, ever.
-    * **Atomic writes.** An upload streams to a dot-prefixed temp file
-      and is renamed into place only when the last block lands. A board
-      pulling `zImage` gets either the previous complete file or the
-      new complete file, never the half of it that has arrived so far.
-    * **Byte caps.** Per-transfer and whole-directory limits, refused
-      with TFTP's `enospc`. Filling the data partition takes the event
-      log and tailscaled's state down with it.
-    * **Event-log entries** per completed or aborted transfer, with the
-      peer address — the only audit trail a protocol with no
-      authentication can offer.
+    * flat namespace — directory components are stripped, so a board's
+      `pxelinux.cfg/default` and an agent's `default` are one file;
+    * atomic writes — an upload lands in a dot-prefixed temp file and
+      is renamed into place on the last block, so a board never reads a
+      half-written image;
+    * per-transfer and whole-directory byte caps, refused with `enospc`;
+    * an event-log entry per transfer with the peer address, the only
+      audit trail a protocol with no authentication can offer.
 
-  `octet` mode only: `netascii`'s CRLF translation corrupts firmware
-  images, and no bootloader asks for it.
+  `octet` mode only: netascii's CRLF translation would corrupt images.
   """
 
   @behaviour :tftp
@@ -39,40 +32,22 @@ defmodule UsbProxy.Tftp.Store do
     count: 0
   ]
 
-  # Whatever the client asks for is what it gets, up to the engine's own
-  # ceiling (it refuses anything above 65464 before the callback is
-  # reached). Clamping down to a frame-sized 1468 would be the tidier
-  # answer — fragmented UDP is a classic way to make a bootloader hang
-  # — but a server that *reduces* blksize is a live interop hazard:
-  # OTP's own TFTP client ignores the reduction in an OACK on upload,
-  # keeps sending its original block size, and stalls until the
-  # transfer times out. Block size is the client's call.
-  #
-  # Which puts one hazard beyond this server's reach: a client that
-  # asks for blocks bigger than its own socket can receive gets
-  # truncated datagrams, and a truncated block looks exactly like the
-  # last block — a short file, reported as a successful transfer.
-  # OTP's client truncates above 8192 (measured); 1468 is the value
-  # everything handles. `UsbProxy.Tftp` sizes the *server's* sockets
-  # for the largest block the protocol allows, so uploads are safe at
-  # any negotiated size.
+  # Never reduce a client's blksize: OTP's client ignores the reduction
+  # in an OACK on upload and stalls until it times out. The engine
+  # refuses anything above 65464 before we see it.
   @max_blksize 65_464
   @default_blksize 512
 
-  # TFTP numbers blocks in 16 bits and OTP's engine does not roll the
-  # counter over — `tftp_lib:encode_msg/1` simply has no clause for
-  # block 65536, so an oversized transfer dies with a function_clause
-  # partway through instead of an error the client can report. Refuse
-  # it up front: 32 MiB at the default 512-byte blocks, ~92 MiB once a
-  # client negotiates blksize=1468.
+  # 16-bit block numbers, and the engine has no rollover clause — past
+  # block 65535 a transfer dies with a function_clause partway through
+  # rather than an error the client can report. Refuse it up front.
   @max_blocks 65_535
 
   ## tftp callbacks
 
   @impl true
   def prepare(_peer, _access, _filename, _mode, _options, _initial) do
-    # Client-side hook. usbproxy is only ever the server; the client
-    # side of a transfer here would be OTP's own tftp_binary/tftp_file.
+    # Client-side hook; usbproxy is only ever the server.
     {:error, {:badop, "usbproxy's TFTP callback is server-side only"}}
   end
 
@@ -183,9 +158,7 @@ defmodule UsbProxy.Tftp.Store do
     end
   end
 
-  # A read cannot be truncated the way a write can — the file is
-  # already whatever size it is — so an oversized one is refused before
-  # a single block goes out.
+  # Refuse an oversized read before a single block goes out.
   defp check_size(:read, path, limit, blksize) do
     case File.stat(path) do
       {:ok, %{size: size}} when size > limit ->
@@ -210,8 +183,7 @@ defmodule UsbProxy.Tftp.Store do
   end
 
   defp do_open(%{access: :write} = state) do
-    # Dot-prefixed so `safe_name/1` can never name a temp file, and so
-    # a partial upload is not listed as a usable artifact.
+    # Dot-prefixed so `safe_name/1` can never name a temp file.
     temp = Path.join(Path.dirname(state.path), ".#{state.name}.part.#{unique()}")
 
     case :file.open(temp, [:write, :delayed_write, :raw, :binary]) do
@@ -258,9 +230,7 @@ defmodule UsbProxy.Tftp.Store do
         "netascii would corrupt binary images"}}
   end
 
-  # One flat namespace: `boot/zImage`, `/zImage` and `zImage` are the
-  # same file. Bootloaders prepend paths from their own config and
-  # there is nothing here for those paths to mean.
+  # `boot/zImage`, `/zImage` and `zImage` are the same file.
   defp safe_name(filename) do
     name = filename |> to_string() |> Path.basename()
 
@@ -276,12 +246,10 @@ defmodule UsbProxy.Tftp.Store do
     end
   end
 
-  # How many bytes this transfer may move before it runs out of disk:
-  # a read is bounded only by the file, a write by whichever is
-  # smaller, the per-file cap or the room left under the directory cap.
-  # The directory scan counts temp files, so concurrent uploads see
-  # each other — approximately. This is a safety valve against filling
-  # the data partition, not a quota system.
+  # A write is bounded by the smaller of the per-file cap and the room
+  # left under the directory cap. The scan counts temp files, so
+  # concurrent uploads see each other approximately — this is a safety
+  # valve, not a quota system.
   defp space_limit(:read, _path, _initial), do: {:ok, :infinity}
 
   defp space_limit(:write, path, initial) do
@@ -316,10 +284,9 @@ defmodule UsbProxy.Tftp.Store do
 
   ## Option negotiation (RFC 2347-2349)
   #
-  # Server side: options may be dropped or answered with a different
-  # value, but never added — the engine rejects anything the client did
-  # not ask for. Keys and values stay charlists: the engine looks them
-  # up with lists:keysearch/3 and a binary would silently miss.
+  # Options may be dropped or answered with a different value, never
+  # added. Keys and values stay charlists: the engine looks them up
+  # with lists:keysearch/3 and a binary would silently miss.
 
   defp accept_options(options, access, path, limit) do
     Enum.reduce_while(options, {:ok, []}, fn option, {:ok, acc} ->
@@ -341,8 +308,7 @@ defmodule UsbProxy.Tftp.Store do
   end
 
   # RFC 2349: on a read the client sends 0 and we answer with the real
-  # size; on a write it declares the size and we echo it back, which is
-  # the earliest point we can refuse an image that will not fit.
+  # size; on a write it declares the size and we echo it back.
   defp accept_option({~c"tsize", _value}, :read, path, _limit) do
     case File.stat(path) do
       {:ok, %{size: size}} -> {:ok, [{~c"tsize", ~c"#{size}"}]}
@@ -366,9 +332,8 @@ defmodule UsbProxy.Tftp.Store do
   # not a reason to fail a boot.
   defp accept_option(_option, _access, _path, _limit), do: {:ok, []}
 
-  # What we will answer `blksize` with, and therefore how big the
-  # blocks actually are. Needed before the options are assembled: the
-  # per-transfer byte ceiling depends on it.
+  # Needed before the options are assembled: the per-transfer byte
+  # ceiling depends on it.
   defp negotiated_blksize(options) do
     with {_, value} <- List.keyfind(options, ~c"blksize", 0),
          {:ok, requested} when requested > 0 <- to_integer(value) do
@@ -393,9 +358,8 @@ defmodule UsbProxy.Tftp.Store do
     UsbProxy.EventLog.append(event, %{name: state.name, peer: state.peer, bytes: bytes})
   end
 
-  # The callback docs promise an ip_address() here, but tftp_engine
-  # runs the host through tftp_lib:host_to_string/1 first, so what
-  # actually arrives is a charlist. Handle both.
+  # The callback docs promise an ip_address(), but the engine runs it
+  # through tftp_lib:host_to_string/1 first. Handle both.
   defp format_peer({_type, host, port}) when is_list(host), do: "#{host}:#{port}"
   defp format_peer({_type, host, port}) when is_tuple(host), do: "#{:inet.ntoa(host)}:#{port}"
   defp format_peer(other), do: inspect(other)

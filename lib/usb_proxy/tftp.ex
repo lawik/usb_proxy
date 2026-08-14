@@ -3,38 +3,19 @@ defmodule UsbProxy.Tftp do
   TFTP server (RFC 1350 plus the RFC 2347-2349 options), read and write,
   over one flat directory on the data partition.
 
-  Two client populations share it, deliberately undiscriminated:
+  Two client populations share it, deliberately undiscriminated: target
+  boards on the lab network netbooting from their bootloader, and
+  agents on the tailnet moving files. No authentication, no per-client
+  namespace, same-name uploads clobber — TFTP offers none of that, and
+  network reachability is the access control. See `UsbProxy.Tftp.Store`
+  for the guarantees that *are* made.
 
-    * **target boards on the lab network**, pulling kernels, device
-      trees, rootfs images and vendor firmware from their bootloader
-      (`tftpboot`, `dhcp`, PXE). The control channel for that is
-      whatever serial console or USB/IP path the agent already holds —
-      TFTP carries the bytes, not the commands;
-    * **agents on the tailnet**, pushing images up and pulling artifacts
-      back down. Boards can only see files that somebody uploaded, and
-      agents can only see files boards uploaded — same directory, no
-      distinction.
+  Retry-forever, like `UsbProxy.DaemonKeeper`: a UDP port that will not
+  open must not blow a restart budget and take USB/IP, consoles and the
+  API down with it.
 
-  There is no authentication and no per-client namespace. TFTP has
-  neither and never will; network reachability is the access control
-  (the tailnet ACL on one side, the lab LAN on the other), and two
-  clients that pick the same filename clobber each other. That is an
-  accepted trade for a protocol every bootloader on earth already
-  speaks. See `UsbProxy.Tftp.Store` for the guarantees that *are*
-  made — atomic writes, flat names, byte caps.
-
-  Retry-forever, like `UsbProxy.DaemonKeeper`: if the UDP port cannot
-  be opened (already bound, no address yet at boot) this must not blow
-  a restart budget and take USB/IP, consoles and the API down with it.
-  The event log records the flapping.
-
-  ## Ports
-
-  Port 69 takes the request; every transfer then runs on its own
-  ephemeral port, chosen from `:data_ports`. Both have to be open in
-  the tailnet ACL for agents to reach the server:
-
-      "dst": ["tag:usbproxy:69", "tag:usbproxy:6900-6999"]  # udp
+  Port 69 takes the request; each transfer then runs on its own port
+  from `:data_ports`. Both need to be open in the tailnet ACL.
   """
 
   use GenServer
@@ -87,9 +68,8 @@ defmodule UsbProxy.Tftp do
       daemon: nil
     }
 
-    # Uploads interrupted by a power cut leave temp files behind. Boot
-    # reconciliation: nothing about the previous boot is assumed, and a
-    # `.part` file is never resumable.
+    # Power cuts leave temp files behind, and a `.part` is never
+    # resumable.
     sweep_partials(root)
 
     {:ok, state, {:continue, :start_daemon}}
@@ -160,11 +140,9 @@ defmodule UsbProxy.Tftp do
       {:port, state.port},
       {:port_policy, {:range, Enum.min(state.data_ports), Enum.max(state.data_ports)}},
       {:max_conn, state.max_conn},
-      # The engine sizes its sockets for the default 512-byte blocks. A
-      # client that negotiates a large blksize then has its datagrams
-      # silently truncated on receive, and a truncated block reads as
-      # the last one — a short file, reported as success. Size the
-      # server's sockets for the largest block the protocol allows.
+      # The engine sizes its sockets for 512-byte blocks; a larger
+      # negotiated blksize then truncates on receive, and a truncated
+      # block reads as the last one — a short file, reported as success.
       {:udp, [{:recbuf, 65_536}, {:sndbuf, 65_536}, {:buffer, 65_536}]},
       {:callback,
        {~c".*", UsbProxy.Tftp.Store,
@@ -174,9 +152,7 @@ defmodule UsbProxy.Tftp do
           max_total_bytes: state.max_total_bytes
         }}},
       {:logger, UsbProxy.Tftp.Logger},
-      # :brief logs an open/close line per transfer at debug level —
-      # worth it while boards are being brought up, and turned down
-      # with `debug: :none` in config without touching code.
+      # :brief logs an open/close line per transfer at debug level.
       {:debug, state.debug}
     ]
 
