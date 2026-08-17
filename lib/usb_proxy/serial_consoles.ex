@@ -15,9 +15,10 @@ defmodule UsbProxy.SerialConsoles do
       device name, first come first served, held for the lifetime of
       this boot. Agents must discover the port via the API, never
       hardcode it.
-    * Consoles open at the configured default speed; `set_speed/2`
-      reopens the UART at another baud rate and sticks for the rest of
-      the boot, including across replugs.
+    * A console is started with an explicit baud rate (the configured
+      default); `set_speed/2` reopens the UART at another one. Nothing
+      remembers it: a console that restarts is back at the default, so
+      agents re-read the speed rather than assuming it.
   """
 
   use Supervisor
@@ -123,14 +124,16 @@ defmodule UsbProxy.SerialConsoles.Manager do
         state
 
       port ->
+        speed = UsbProxy.SerialConsoles.Worker.default_speed()
+
         {:ok, pid} =
           DynamicSupervisor.start_child(
             UsbProxy.SerialConsoles.WorkerSupervisor,
-            {UsbProxy.SerialConsoles.Worker, name: name, port: port}
+            {UsbProxy.SerialConsoles.Worker, name: name, port: port, speed: speed}
           )
 
-        Logger.info("serial console for #{name} on port #{port}")
-        UsbProxy.EventLog.append(:console_started, %{name: name, port: port})
+        Logger.info("serial console for #{name} on port #{port} at #{speed}")
+        UsbProxy.EventLog.append(:console_started, %{name: name, port: port, speed: speed})
         put_in(state.consoles[name], %{port: port, pid: pid})
     end
   end
@@ -189,7 +192,7 @@ defmodule UsbProxy.SerialConsoles.Worker do
       client: nil,
       uart: nil,
       tty: nil,
-      speed: Keyword.get(opts, :speed, default_speed())
+      speed: Keyword.fetch!(opts, :speed)
     }
 
     # Re-check the UART when the registry sees changes: a mode switch
@@ -393,7 +396,7 @@ defmodule UsbProxy.SerialConsoles.Worker do
     |> Enum.find(&(String.starts_with?(&1, "tty") and &1 != "tty"))
   end
 
-  @doc "Baud rate a console starts at, from config."
+  @doc "Baud rate a console is started with, from config."
   def default_speed() do
     Application.get_env(:usb_proxy, UsbProxy.SerialConsoles, [])
     |> Keyword.get(:speed, @default_speed)

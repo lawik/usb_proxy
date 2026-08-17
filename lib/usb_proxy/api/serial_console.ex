@@ -57,9 +57,11 @@ defmodule UsbProxy.Api.SerialConsole do
       connected TCP clients stay connected, the target's bytes just
       start arriving at the new rate. Consoles default to 115200; use
       this when a target speaks something else (bootloaders at 57600,
-      many SoCs at 921600). The setting sticks for the rest of this
-      usbproxy's uptime, including across replugs, so put it back when
-      you are done. Allowed speeds: #{Enum.join(@speeds, ", ")}.
+      many SoCs at 921600). Nothing remembers it: a console that
+      restarts — and anything that restarts this box, including
+      recovery — is back at 115200. Re-read the console's `speed` after
+      anything disruptive instead of assuming yours still holds.
+      Allowed speeds: #{Enum.join(@speeds, ", ")}.
       """)
 
       argument(:name, :string, allow_nil?: false)

@@ -48,8 +48,9 @@ defmodule UsbProxyWeb.Router do
     - serial: connect to its TCP console port (from list_serial_consoles)
       with plain TCP, e.g. `nc <this-host> <port>`. Raw byte pipe at
       115200 unless changed — set_serial_console_speed reopens the UART
-      at another baud rate and it stays there for the rest of the box's
-      uptime, so put it back when you are done. One client at a time;
+      at another baud rate, and nothing remembers it: anything that
+      restarts the console or the box puts it back to 115200, so re-read
+      `speed` from list_serial_consoles. One client at a time;
       connecting replaces the previous client. For MicroPython boards,
       press Ctrl-C then Enter to get the >>> REPL prompt.
     - usbip: attach it into YOUR kernel over USB/IP (needs vhci_hcd and

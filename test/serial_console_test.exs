@@ -13,7 +13,7 @@ defmodule UsbProxy.SerialConsoleTest do
   @port 7097
 
   setup do
-    pid = start_supervised!({Worker, name: "no-such-device", port: @port})
+    pid = start_supervised!({Worker, name: "no-such-device", port: @port, speed: 115_200})
     %{worker: pid}
   end
 
@@ -61,6 +61,19 @@ defmodule UsbProxy.SerialConsoleTest do
 
     assert %{speed: 57_600, client_count: 1} = Worker.set_speed(worker, 57_600)
     refute_receive {:tcp_closed, ^socket}, 200
+  end
+
+  test "a restarted console forgets the speed it was set to" do
+    spec =
+      Supervisor.child_spec({Worker, name: "restarted", port: 7096, speed: 115_200},
+        id: :restarted
+      )
+
+    worker = start_supervised!(spec)
+    assert %{speed: 57_600} = Worker.set_speed(worker, 57_600)
+
+    stop_supervised!(:restarted)
+    assert %{speed: 115_200} = Worker.status(start_supervised!(spec))
   end
 
   describe "set_speed action" do
