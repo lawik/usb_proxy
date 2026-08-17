@@ -33,6 +33,7 @@ defmodule UsbProxyWeb.Router do
       :set_device_exposure,
       :switch_device_mode,
       :list_serial_consoles,
+      :set_serial_console_speed,
       :recover
     ],
     protocol_version_statement: "2024-11-05",
@@ -46,9 +47,11 @@ defmodule UsbProxyWeb.Router do
 
     - serial: connect to its TCP console port (from list_serial_consoles)
       with plain TCP, e.g. `nc <this-host> <port>`. Raw byte pipe at
-      115200. One client at a time; connecting replaces the previous
-      client. For MicroPython boards, press Ctrl-C then Enter to get the
-      >>> REPL prompt.
+      115200 unless changed — set_serial_console_speed reopens the UART
+      at another baud rate and it stays there for the rest of the box's
+      uptime, so put it back when you are done. One client at a time;
+      connecting replaces the previous client. For MicroPython boards,
+      press Ctrl-C then Enter to get the >>> REPL prompt.
     - usbip: attach it into YOUR kernel over USB/IP (needs vhci_hcd and
       usbip tools on your side):
         sudo modprobe vhci_hcd                     # once per boot

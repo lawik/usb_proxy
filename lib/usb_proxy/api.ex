@@ -90,8 +90,12 @@ defmodule UsbProxy.Api do
       usbproxy: connect with plain TCP (`nc <usbproxy> <port>`) for a
       raw byte pipe to the target's UART — no protocol, no
       authentication (network reachability is the access control).
+      `speed` is the baud rate the console is open at (115200 unless
+      someone changed it with set_serial_console_speed).
       """)
     end
+
+    tool(:set_serial_console_speed, UsbProxy.Api.SerialConsole, :set_speed)
   end
 
   # Code interfaces: the same actions, callable from IEx on the box —
@@ -106,6 +110,7 @@ defmodule UsbProxy.Api do
 
     resource UsbProxy.Api.SerialConsole do
       define(:list_serial_consoles, action: :read)
+      define(:set_serial_console_speed, action: :set_speed, args: [:name, :speed])
     end
 
     resource UsbProxy.Api.RecoveryAction do

@@ -15,6 +15,9 @@ defmodule UsbProxy.SerialConsoles do
       device name, first come first served, held for the lifetime of
       this boot. Agents must discover the port via the API, never
       hardcode it.
+    * Consoles open at the configured default speed; `set_speed/2`
+      reopens the UART at another baud rate and sticks for the rest of
+      the boot, including across replugs.
   """
 
   use Supervisor
@@ -31,9 +34,17 @@ defmodule UsbProxy.SerialConsoles do
     Supervisor.init(children, strategy: :rest_for_one)
   end
 
-  @doc "Live console list: name, tcp_port, status, client_count."
+  @doc "Live console list: name, tcp_port, status, client_count, speed."
   @spec list() :: [map()]
   def list(), do: UsbProxy.SerialConsoles.Manager.list()
+
+  @doc "Set a console's baud rate, reopening its UART."
+  @spec set_speed(String.t(), pos_integer()) :: {:ok, map()} | {:error, :no_console}
+  def set_speed(name, speed) do
+    with {:ok, pid} <- UsbProxy.SerialConsoles.Manager.worker_pid(name) do
+      {:ok, UsbProxy.SerialConsoles.Worker.set_speed(pid, speed)}
+    end
+  end
 end
 
 defmodule UsbProxy.SerialConsoles.Manager do
@@ -65,7 +76,11 @@ defmodule UsbProxy.SerialConsoles.Manager do
           if Process.alive?(pid) do
             UsbProxy.SerialConsoles.Worker.status(pid)
           else
-            %{status: :adapter_missing, client_count: 0}
+            %{
+              status: :adapter_missing,
+              client_count: 0,
+              speed: UsbProxy.SerialConsoles.Worker.default_speed()
+            }
           end
 
         Map.merge(%{name: name, tcp_port: port}, worker_status)
@@ -150,6 +165,9 @@ defmodule UsbProxy.SerialConsoles.Worker do
   @doc "Write bytes to the UART (used by ModeSwitch for REPL sequences)."
   def inject(pid, data), do: GenServer.call(pid, {:inject, data})
 
+  @doc "Change the baud rate; an open UART is reopened at the new speed."
+  def set_speed(pid, speed), do: GenServer.call(pid, {:set_speed, speed})
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -170,7 +188,8 @@ defmodule UsbProxy.SerialConsoles.Worker do
       listen_socket: listen_socket,
       client: nil,
       uart: nil,
-      tty: nil
+      tty: nil,
+      speed: Keyword.get(opts, :speed, default_speed())
     }
 
     # Re-check the UART when the registry sees changes: a mode switch
@@ -185,15 +204,18 @@ defmodule UsbProxy.SerialConsoles.Worker do
   def handle_continue(:open_uart, state), do: {:noreply, try_open_uart(state)}
 
   @impl true
-  def handle_call(:status, _from, state) do
-    status =
-      cond do
-        state.uart -> :up
-        exposure(state.name) != :serial -> :released
-        true -> :adapter_missing
-      end
+  def handle_call(:status, _from, state), do: {:reply, status_map(state), state}
 
-    {:reply, %{status: status, client_count: if(state.client, do: 1, else: 0)}, state}
+  def handle_call({:set_speed, speed}, _from, %{speed: speed} = state) do
+    {:reply, status_map(state), state}
+  end
+
+  def handle_call({:set_speed, speed}, _from, state) do
+    Logger.info("console #{state.name}: speed #{state.speed} -> #{speed}")
+    UsbProxy.EventLog.append(:console_speed, %{name: state.name, speed: speed})
+
+    state = reopen_uart(%{state | speed: speed})
+    {:reply, status_map(state), state}
   end
 
   def handle_call({:inject, data}, _from, state) do
@@ -282,13 +304,37 @@ defmodule UsbProxy.SerialConsoles.Worker do
 
   def handle_info({:EXIT, _other, _reason}, state), do: {:noreply, state}
 
+  defp status_map(state) do
+    status =
+      cond do
+        state.uart -> :up
+        exposure(state.name) != :serial -> :released
+        true -> :adapter_missing
+      end
+
+    %{
+      status: status,
+      client_count: if(state.client, do: 1, else: 0),
+      speed: state.speed
+    }
+  end
+
   defp close_uart(state) do
+    Process.send_after(self(), :open_uart, @uart_retry_ms)
+    stop_uart(state)
+  end
+
+  # Speed change on a live UART: no reason to make the client wait out
+  # the retry interval.
+  defp reopen_uart(%{uart: nil} = state), do: state
+  defp reopen_uart(state), do: state |> stop_uart() |> try_open_uart()
+
+  defp stop_uart(state) do
     if state.uart do
       Circuits.UART.close(state.uart)
       Circuits.UART.stop(state.uart)
     end
 
-    Process.send_after(self(), :open_uart, @uart_retry_ms)
     %{state | uart: nil, tty: nil}
   end
 
@@ -314,9 +360,9 @@ defmodule UsbProxy.SerialConsoles.Worker do
          tty when is_binary(tty) <- find_tty(device.busid) do
       {:ok, uart} = Circuits.UART.start_link()
 
-      case Circuits.UART.open(uart, tty, speed: speed(), active: true) do
+      case Circuits.UART.open(uart, tty, speed: state.speed, active: true) do
         :ok ->
-          Logger.info("console #{state.name}: opened #{tty}")
+          Logger.info("console #{state.name}: opened #{tty} at #{state.speed}")
           %{state | uart: uart, tty: tty}
 
         {:error, reason} ->
@@ -347,7 +393,8 @@ defmodule UsbProxy.SerialConsoles.Worker do
     |> Enum.find(&(String.starts_with?(&1, "tty") and &1 != "tty"))
   end
 
-  defp speed() do
+  @doc "Baud rate a console starts at, from config."
+  def default_speed() do
     Application.get_env(:usb_proxy, UsbProxy.SerialConsoles, [])
     |> Keyword.get(:speed, @default_speed)
   end

@@ -45,6 +45,41 @@ defmodule UsbProxy.SerialConsoleTest do
     assert %{client_count: 1} = Worker.status(worker)
   end
 
+  test "starts at the default speed and takes a new one", %{worker: worker} do
+    assert %{speed: 115_200} = Worker.status(worker)
+
+    assert %{speed: 9600} = Worker.set_speed(worker, 9600)
+    assert %{speed: 9600} = Worker.status(worker)
+
+    # Setting the speed it already has is a no-op, not a reopen.
+    assert %{speed: 9600} = Worker.set_speed(worker, 9600)
+  end
+
+  test "a speed change keeps the client connected", %{worker: worker} do
+    socket = connect()
+    wait_until(fn -> Worker.status(worker).client_count == 1 end)
+
+    assert %{speed: 57_600, client_count: 1} = Worker.set_speed(worker, 57_600)
+    refute_receive {:tcp_closed, ^socket}, 200
+  end
+
+  describe "set_speed action" do
+    setup do
+      start_supervised!(UsbProxy.SerialConsoles)
+      :ok
+    end
+
+    test "rejects a speed no adapter would take" do
+      assert {:error, error} = UsbProxy.Api.set_serial_console_speed("no-such-device", 12_345)
+      assert Exception.message(error) =~ "unsupported speed"
+    end
+
+    test "rejects an unknown console" do
+      assert {:error, error} = UsbProxy.Api.set_serial_console_speed("no-such-device", 9600)
+      assert Exception.message(error) =~ "no serial console named"
+    end
+  end
+
   test "reconnect loop works: many sequential clients", %{worker: worker} do
     for _ <- 1..5 do
       socket = connect()
